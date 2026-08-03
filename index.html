@@ -1,0 +1,1472 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>ShortsVideoMaker — нарезка Shorts с автосубтитрами</title>
+<meta name="description" content="Нарезка вертикальных клипов из фильмов и сериалов с автоматическими субтитрами. Всё работает прямо в браузере, видео никуда не загружается.">
+<meta name="color-scheme" content="dark">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23120f1e'/%3E%3Cpath d='M25 18l22 14-22 14z' fill='%23a78bfa'/%3E%3C/svg%3E">
+<style>
+:root{
+  --bg:#0c0a14;
+  --bg2:#12101d;
+  --card:#171528;
+  --card2:#1e1b33;
+  --line:#2c2846;
+  --txt:#eceaf6;
+  --muted:#9b95bd;
+  --acc:#a78bfa;
+  --acc2:#7c5cf5;
+  --ok:#34d399;
+  --warn:#fbbf24;
+  --err:#fb7185;
+  --r:14px;
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{
+  background:radial-gradient(1200px 700px at 15% -10%,#241d47 0%,transparent 60%),
+             radial-gradient(900px 600px at 100% 0%,#12233f 0%,transparent 55%),
+             var(--bg);
+  color:var(--txt);
+  font:15px/1.5 "Segoe UI",Roboto,-apple-system,system-ui,"Helvetica Neue",Arial,sans-serif;
+  min-height:100vh;
+  -webkit-text-size-adjust:100%;
+}
+.wrap{max-width:1220px;margin:0 auto;padding:22px 16px 80px}
+header.top{display:flex;flex-wrap:wrap;gap:14px;align-items:center;margin-bottom:18px}
+.logo{width:46px;height:46px;border-radius:13px;background:linear-gradient(140deg,var(--acc2),#22d3ee);
+  display:grid;place-items:center;flex:0 0 auto;box-shadow:0 8px 22px rgba(124,92,245,.35)}
+.logo svg{width:24px;height:24px}
+h1{font-size:22px;margin:0;letter-spacing:-.3px}
+h1 span{color:var(--acc)}
+.sub{color:var(--muted);font-size:13.5px;margin:2px 0 0}
+.badge{margin-left:auto;font-size:12px;color:var(--muted);border:1px solid var(--line);
+  padding:6px 11px;border-radius:999px;background:rgba(255,255,255,.02)}
+
+.card{background:linear-gradient(180deg,var(--card) 0%,var(--bg2) 100%);border:1px solid var(--line);
+  border-radius:var(--r);padding:16px;margin-bottom:14px}
+.card > h2{font-size:14px;margin:0 0 12px;letter-spacing:.4px;text-transform:uppercase;color:var(--muted);
+  display:flex;align-items:center;gap:9px}
+.card > h2 i{font-style:normal;width:22px;height:22px;border-radius:7px;background:var(--card2);
+  color:var(--acc);display:grid;place-items:center;font-size:12px;font-weight:700;border:1px solid var(--line)}
+.layout{display:grid;grid-template-columns:minmax(0,420px) minmax(0,1fr);gap:14px;align-items:start}
+@media(max-width:900px){.layout{grid-template-columns:1fr}}
+.sticky{position:sticky;top:14px}
+@media(max-width:900px){.sticky{position:static}}
+
+/* controls */
+button,.btn{font:inherit;font-weight:600;color:var(--txt);background:var(--card2);border:1px solid var(--line);
+  border-radius:10px;padding:9px 13px;cursor:pointer;transition:.14s;display:inline-flex;align-items:center;
+  gap:7px;justify-content:center;text-decoration:none}
+button:hover:not(:disabled),.btn:hover{border-color:var(--acc);background:#272247}
+button:disabled{opacity:.4;cursor:not-allowed}
+button.primary{background:linear-gradient(135deg,var(--acc2),#6d3ff2);border-color:transparent;color:#fff;
+  box-shadow:0 6px 18px rgba(109,63,242,.32)}
+button.primary:hover:not(:disabled){filter:brightness(1.1);border-color:transparent}
+button.ghost{background:transparent}
+button.sm{padding:6px 9px;font-size:13px;border-radius:8px}
+input,select,textarea{font:inherit;color:var(--txt);background:#100e1c;border:1px solid var(--line);
+  border-radius:9px;padding:8px 10px;width:100%;min-width:0}
+input:focus,select:focus{outline:2px solid rgba(167,139,250,.45);outline-offset:0;border-color:var(--acc)}
+input[type=color]{padding:2px;height:36px;cursor:pointer}
+input[type=range]{-webkit-appearance:none;appearance:none;background:transparent;padding:0;height:22px;border:0}
+input[type=range]::-webkit-slider-runnable-track{height:6px;border-radius:99px;background:#2b2748}
+input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:16px;height:16px;border-radius:50%;
+  background:var(--acc);margin-top:-5px;box-shadow:0 0 0 3px rgba(167,139,250,.22);cursor:pointer}
+input[type=range]::-moz-range-track{height:6px;border-radius:99px;background:#2b2748}
+input[type=range]::-moz-range-thumb{width:16px;height:16px;border:0;border-radius:50%;background:var(--acc);cursor:pointer}
+label.f{display:block;font-size:12px;color:var(--muted);margin:0 0 5px}
+.row{display:flex;gap:9px;flex-wrap:wrap}
+.row>*{flex:1 1 auto}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+@media(max-width:520px){.grid3{grid-template-columns:1fr 1fr}}
+.chk{display:flex;align-items:center;gap:8px;font-size:13.5px;cursor:pointer;color:var(--txt)}
+.chk input{width:16px;height:16px;flex:0 0 auto;accent-color:var(--acc)}
+.hint{color:var(--muted);font-size:12.5px;margin:8px 0 0}
+.mono{font-variant-numeric:tabular-nums;font-family:"Cascadia Mono",Consolas,monospace}
+
+/* dropzone */
+.drop{border:2px dashed var(--line);border-radius:var(--r);padding:26px 16px;text-align:center;cursor:pointer;
+  transition:.15s;background:rgba(255,255,255,.015)}
+.drop:hover,.drop.over{border-color:var(--acc);background:rgba(167,139,250,.08)}
+.drop b{display:block;font-size:16px;margin-bottom:4px}
+.drop small{color:var(--muted)}
+.fileinfo{margin-top:11px;font-size:13px;color:var(--muted);display:none}
+.fileinfo.on{display:block}
+.fileinfo b{color:var(--txt)}
+
+/* preview */
+.stage{background:#000;border-radius:12px;overflow:hidden;display:grid;place-items:center;
+  border:1px solid var(--line);min-height:180px}
+#preview{max-width:100%;max-height:62vh;display:block}
+@media(max-width:900px){#preview{max-height:52vh}}
+.playbar{display:flex;align-items:center;gap:10px;margin-top:11px}
+.playbar .time{font-size:12.5px;color:var(--muted);margin-left:auto}
+.tl{position:relative;height:26px;margin:12px 0 4px;background:#100e1c;border:1px solid var(--line);
+  border-radius:8px;overflow:hidden;cursor:pointer;touch-action:none}
+.tl-sel{position:absolute;top:0;bottom:0;background:linear-gradient(180deg,rgba(167,139,250,.42),rgba(124,92,245,.22));
+  border-left:2px solid var(--acc);border-right:2px solid var(--acc)}
+.tl-head{position:absolute;top:-2px;bottom:-2px;width:2px;background:#fff;box-shadow:0 0 7px rgba(255,255,255,.8)}
+.tl-lab{position:absolute;left:8px;top:50%;transform:translateY(-50%);font-size:11px;color:var(--muted);
+  pointer-events:none;letter-spacing:.3px}
+.videohost{position:absolute;width:1px;height:1px;overflow:hidden;opacity:0;pointer-events:none;left:-10px;top:-10px}
+
+/* banners */
+.banner{border-radius:11px;padding:11px 13px;font-size:13.5px;margin-bottom:10px;border:1px solid;
+  display:flex;gap:10px;align-items:flex-start;line-height:1.45}
+.banner .x{margin-left:auto;cursor:pointer;color:inherit;opacity:.6;background:none;border:0;padding:0 2px;font-size:16px}
+.banner.err{background:rgba(251,113,133,.1);border-color:rgba(251,113,133,.4);color:#ffd6dd}
+.banner.warn{background:rgba(251,191,36,.09);border-color:rgba(251,191,36,.35);color:#ffe9bd}
+.banner.info{background:rgba(34,211,238,.08);border-color:rgba(34,211,238,.3);color:#c8f2fb}
+.banner.ok{background:rgba(52,211,153,.09);border-color:rgba(52,211,153,.35);color:#c6f4e4}
+.banner b{color:#fff}
+
+/* progress */
+.prog{height:8px;border-radius:99px;background:#100e1c;border:1px solid var(--line);overflow:hidden;margin:9px 0 6px;display:none}
+.prog.on{display:block}
+.prog>i{display:block;height:100%;width:0%;background:linear-gradient(90deg,var(--acc2),#22d3ee);transition:width .18s}
+.status{font-size:12.5px;color:var(--muted);min-height:17px}
+
+/* cues */
+.cues{max-height:340px;overflow:auto;margin-top:10px;border:1px solid var(--line);border-radius:11px;background:#100e1c}
+.cue{display:grid;grid-template-columns:78px 78px 1fr 30px;gap:7px;padding:7px 8px;border-bottom:1px solid #221f3a;align-items:center}
+.cue:last-child{border-bottom:0}
+.cue.act{background:rgba(167,139,250,.11)}
+.cue input{padding:6px 7px;font-size:13px}
+.cue input.t{font-variant-numeric:tabular-nums;text-align:center}
+.cue .del{background:transparent;border:0;color:var(--muted);padding:4px;border-radius:7px}
+.cue .del:hover{color:var(--err);background:rgba(251,113,133,.12)}
+.cues-empty{padding:18px;text-align:center;color:var(--muted);font-size:13px}
+.cue-head{display:grid;grid-template-columns:78px 78px 1fr 30px;gap:7px;padding:6px 8px;font-size:11px;
+  color:var(--muted);border-bottom:1px solid var(--line);position:sticky;top:0;background:#15122480;backdrop-filter:blur(6px)}
+
+/* segmented */
+.seg{display:flex;background:#100e1c;border:1px solid var(--line);border-radius:10px;padding:3px;gap:3px}
+.seg button{flex:1;background:transparent;border:0;padding:8px 6px;border-radius:8px;font-size:13.5px;color:var(--muted)}
+.seg button.on{background:var(--card2);color:var(--txt);border:1px solid var(--line)}
+.seg button:hover{color:var(--txt)}
+
+.result{margin-top:12px;display:none}
+.result.on{display:block}
+.result video{width:100%;max-height:46vh;border-radius:11px;background:#000;border:1px solid var(--line)}
+footer{color:var(--muted);font-size:12.5px;text-align:center;margin-top:26px;line-height:1.7}
+footer a{color:var(--acc)}
+.dis{opacity:.45;pointer-events:none}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="top">
+  <div class="logo" aria-hidden="true">
+    <svg viewBox="0 0 24 24" fill="none"><path d="M8 5.5l10 6.5-10 6.5z" fill="#fff"/></svg>
+  </div>
+  <div>
+    <h1>Shorts<span>VideoMaker</span></h1>
+    <p class="sub">Нарезка вертикальных клипов из фильмов, сериалов и мультфильмов + автосубтитры</p>
+  </div>
+  <div class="badge">🔒 Видео не загружается на сервер — всё считается в браузере</div>
+</header>
+
+<div id="banners"></div>
+
+<!-- ШАГ 1 -->
+<section class="card">
+  <h2><i>1</i>Видео</h2>
+  <div class="drop" id="drop" tabindex="0" role="button" aria-label="Выбрать видеофайл">
+    <b>Перетащите видео сюда или нажмите, чтобы выбрать</b>
+    <small>MP4, WebM, MOV — файл остаётся на вашем компьютере</small>
+  </div>
+  <input type="file" id="file" accept="video/*,.mp4,.webm,.mov,.m4v,.mkv" class="sr">
+  <div class="fileinfo" id="fileinfo"></div>
+</section>
+
+<div class="layout">
+  <!-- ЛЕВАЯ КОЛОНКА: предпросмотр -->
+  <div>
+    <section class="card sticky">
+      <h2><i>👁</i>Предпросмотр</h2>
+      <div class="stage"><canvas id="preview" width="360" height="640"></canvas></div>
+
+      <div class="tl" id="tl">
+        <div class="tl-sel" id="tlSel"></div>
+        <div class="tl-head" id="tlHead"></div>
+        <div class="tl-lab" id="tlLab">видео не выбрано</div>
+      </div>
+      <input type="range" id="seek" min="0" max="1" step="0.001" value="0" disabled aria-label="Перемотка">
+
+      <div class="playbar">
+        <button id="btnPlay" class="sm" disabled title="Играть / пауза">▶ Играть</button>
+        <button id="btnClip" class="sm" disabled title="Проиграть только выбранный отрезок">🎧 Прослушать отрывок</button>
+        <span class="time mono" id="tCur">0:00.0 / 0:00.0</span>
+      </div>
+    </section>
+  </div>
+
+  <!-- ПРАВАЯ КОЛОНКА -->
+  <div id="tools" class="dis">
+
+    <!-- ШАГ 2 -->
+    <section class="card">
+      <h2><i>2</i>Отрывок</h2>
+      <div class="row">
+        <button id="btnSetStart">⟦ Начало здесь</button>
+        <button id="btnSetEnd">Конец здесь ⟧</button>
+      </div>
+      <div class="grid3" style="margin-top:10px">
+        <div><label class="f" for="inStart">Начало, сек</label><input type="number" id="inStart" step="0.05" min="0" value="0"></div>
+        <div><label class="f" for="inEnd">Конец, сек</label><input type="number" id="inEnd" step="0.05" min="0" value="0"></div>
+        <div><label class="f">Длительность</label><input id="inDur" class="mono" readonly value="0.00 с" tabindex="-1"></div>
+      </div>
+      <p class="hint">Кнопки ставят границы по текущему кадру. Для Shorts / TikTok / Reels обычно берут 15–60 секунд.</p>
+    </section>
+
+    <!-- ШАГ 3 -->
+    <section class="card">
+      <h2><i>3</i>Кадрирование</h2>
+      <div class="seg" id="segCrop">
+        <button data-v="vertical" class="on">📱 Вертикально 9:16</button>
+        <button data-v="original">🖥 Исходный формат</button>
+      </div>
+      <div id="panBox" style="margin-top:12px">
+        <label class="f" for="pan">Сдвиг кадра по горизонтали — <span id="panVal">центр</span></label>
+        <input type="range" id="pan" min="0" max="1" step="0.005" value="0.5">
+      </div>
+      <p class="hint">В режиме 9:16 из широкого кадра вырезается вертикальная полоса — ползунком выберите, какую именно часть оставить.</p>
+    </section>
+
+    <!-- ШАГ 4 -->
+    <section class="card">
+      <h2><i>4</i>Автосубтитры</h2>
+      <div class="grid3">
+        <div>
+          <label class="f" for="selModel">Модель Whisper</label>
+          <select id="selModel">
+            <option value="onnx-community/whisper-tiny">tiny — быстрая (~40 МБ)</option>
+            <option value="onnx-community/whisper-base" selected>base — оптимально (~80 МБ)</option>
+            <option value="onnx-community/whisper-small">small — точная (~250 МБ)</option>
+          </select>
+        </div>
+        <div>
+          <label class="f" for="selLang">Язык</label>
+          <select id="selLang">
+            <option value="auto" selected>Авто</option>
+            <option value="russian">Русский</option>
+            <option value="english">Английский</option>
+          </select>
+        </div>
+        <div>
+          <label class="f" for="selSpeed">Снятие звука</label>
+          <select id="selSpeed">
+            <option value="1">1× (надёжно)</option>
+            <option value="2" selected>2× (быстрее)</option>
+            <option value="4">4× (максимум)</option>
+          </select>
+        </div>
+      </div>
+      <label class="chk" style="margin-top:10px"><input type="checkbox" id="chkGpu"> Ускорение WebGPU <span class="hint" style="margin:0" id="gpuNote"></span></label>
+      <div class="row" style="margin-top:11px">
+        <button id="btnAsr" class="primary">✨ Распознать речь</button>
+        <button id="btnAsrStop" class="ghost" style="flex:0 0 auto;display:none">Отмена</button>
+      </div>
+      <div class="prog" id="asrProg"><i></i></div>
+      <div class="status" id="asrStatus">Модель скачается один раз и останется в кеше браузера.</div>
+    </section>
+
+    <!-- ШАГ 5 -->
+    <section class="card">
+      <h2><i>5</i>Субтитры</h2>
+      <div class="row">
+        <button id="btnAddCue" class="sm">＋ Добавить строку</button>
+        <button id="btnClearCues" class="sm ghost">Очистить всё</button>
+        <span class="hint" style="margin:0;align-self:center;flex:0 0 auto" id="cueCount">0 строк</span>
+      </div>
+      <div class="cues" id="cues">
+        <div class="cues-empty">Субтитров пока нет. Распознайте речь или добавьте строки вручную.</div>
+      </div>
+      <p class="hint">Время указано <b>внутри клипа</b> (0 — начало отрывка). Реплики группируются по 3–4 слова — так читается лучше всего.</p>
+    </section>
+
+    <!-- ШАГ 6 -->
+    <section class="card">
+      <h2><i>6</i>Стиль субтитров</h2>
+      <div class="grid2">
+        <div>
+          <label class="f" for="stSize">Размер — <span id="stSizeVal">6.5%</span></label>
+          <input type="range" id="stSize" min="3" max="13" step="0.1" value="6.5">
+        </div>
+        <div>
+          <label class="f" for="stPos">Положение по вертикали — <span id="stPosVal">78%</span></label>
+          <input type="range" id="stPos" min="8" max="94" step="1" value="78">
+        </div>
+      </div>
+      <div class="grid3" style="margin-top:10px">
+        <div><label class="f" for="stColor">Цвет текста</label><input type="color" id="stColor" value="#ffffff"></div>
+        <div><label class="f" for="stActive">Активное слово</label><input type="color" id="stActive" value="#ffd400"></div>
+        <div>
+          <label class="f">Оформление</label>
+          <label class="chk"><input type="checkbox" id="stBox" checked> Подложка</label>
+          <label class="chk" style="margin-top:6px"><input type="checkbox" id="stUpper"> ЗАГЛАВНЫЕ</label>
+        </div>
+      </div>
+      <p class="hint">Жирный шрифт с чёрной обводкой читается на любом фоне. Активное слово подсвечивается — эффект «караоке».</p>
+    </section>
+
+    <!-- ШАГ 7 -->
+    <section class="card">
+      <h2><i>7</i>Экспорт</h2>
+      <div class="grid2">
+        <div>
+          <label class="f" for="selRes">Качество</label>
+          <select id="selRes">
+            <option value="1080" selected>1080p — 1080×1920</option>
+            <option value="720">720p — 720×1280</option>
+          </select>
+        </div>
+        <div>
+          <label class="f" for="selFps">Частота кадров</label>
+          <select id="selFps">
+            <option value="30" selected>30 кадр/с</option>
+            <option value="25">25 кадр/с</option>
+            <option value="60">60 кадр/с</option>
+          </select>
+        </div>
+      </div>
+      <label class="chk" style="margin-top:10px"><input type="checkbox" id="chkMp4" checked> Предпочитать MP4 (если браузер умеет)</label>
+      <div class="row" style="margin-top:11px">
+        <button id="btnExport" class="primary">🎬 Экспортировать клип</button>
+        <button id="btnExportStop" class="ghost" style="flex:0 0 auto;display:none">Остановить</button>
+      </div>
+      <div class="prog" id="expProg"><i></i></div>
+      <div class="status" id="expStatus">Клип записывается в реальном времени: 30 секунд клипа ≈ 30 секунд ожидания.</div>
+      <div class="result" id="result">
+        <video id="outVideo" controls playsinline></video>
+        <div class="row" style="margin-top:10px">
+          <a id="btnDownload" class="btn primary" download="shorts.mp4" href="#">⬇ Скачать</a>
+          <span class="hint" style="margin:0;align-self:center" id="outInfo"></span>
+        </div>
+      </div>
+    </section>
+
+  </div>
+</div>
+
+<footer>
+  ShortsVideoMaker — работает офлайн, кроме первой загрузки модели распознавания речи.<br>
+  Соблюдайте авторские права: ответственность за использование чужих видео лежит на вас.
+</footer>
+</div>
+
+<div class="videohost"><video id="video" playsinline preload="auto" crossorigin="anonymous"></video></div>
+
+<script>
+"use strict";
+/* ============================================================================
+   ShortsVideoMaker — одностраничное приложение без сборщиков и без сервера.
+   Внешняя зависимость только одна: transformers.js c CDN (для распознавания
+   речи). Всё остальное работает офлайн.
+   ========================================================================== */
+
+/* ------------------------------- утилиты --------------------------------- */
+const $  = (s, r) => (r || document).querySelector(s);
+const $$ = (s, r) => Array.prototype.slice.call((r || document).querySelectorAll(s));
+const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+function fmtTime(t){
+  if (!isFinite(t) || t < 0) t = 0;
+  const m = Math.floor(t / 60), s = t - m * 60;
+  return m + ':' + (s < 10 ? '0' : '') + s.toFixed(1);
+}
+function fmtSize(b){
+  if (b < 1024) return b + ' Б';
+  if (b < 1048576) return (b / 1024).toFixed(1) + ' КБ';
+  return (b / 1048576).toFixed(1) + ' МБ';
+}
+function esc(s){
+  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+/* ------------------------------- баннеры --------------------------------- */
+const bannersEl = $('#banners');
+function banner(id, kind, html){
+  let el = document.getElementById('bn-' + id);
+  if (!el){
+    el = document.createElement('div');
+    el.id = 'bn-' + id;
+    bannersEl.appendChild(el);
+  }
+  el.className = 'banner ' + kind;
+  el.innerHTML = '<div>' + html + '</div><button class="x" title="Скрыть" aria-label="Скрыть">✕</button>';
+  el.querySelector('.x').onclick = () => el.remove();
+  return el;
+}
+function dropBanner(id){
+  const el = document.getElementById('bn-' + id);
+  if (el) el.remove();
+}
+
+/* -------------------------------- состояние ------------------------------ */
+const S = {
+  file: null,
+  url: null,
+  duration: 0,
+  vw: 0, vh: 0,
+  hasVideoTrack: true,
+  start: 0,
+  end: 0,
+  crop: 'vertical',
+  pan: 0.5,
+  cues: [],
+  style: { size: 6.5, pos: 78, color: '#ffffff', active: '#ffd400', box: true, upper: false },
+  playingClip: false,
+  busy: false
+};
+
+const video   = $('#video');
+const preview = $('#preview');
+const pctx    = preview.getContext('2d');
+
+/* --------------------------- загрузка файла ------------------------------ */
+const dropEl = $('#drop'), fileEl = $('#file');
+
+dropEl.addEventListener('click', () => fileEl.click());
+dropEl.addEventListener('keydown', e => {
+  if (e.key === 'Enter' || e.key === ' '){ e.preventDefault(); fileEl.click(); }
+});
+fileEl.addEventListener('change', () => { if (fileEl.files && fileEl.files[0]) loadFile(fileEl.files[0]); });
+
+['dragenter','dragover'].forEach(ev => dropEl.addEventListener(ev, e => {
+  e.preventDefault(); e.stopPropagation(); dropEl.classList.add('over');
+}));
+['dragleave','drop'].forEach(ev => dropEl.addEventListener(ev, e => {
+  e.preventDefault(); e.stopPropagation(); dropEl.classList.remove('over');
+}));
+dropEl.addEventListener('drop', e => {
+  const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+  if (f) loadFile(f);
+});
+// не даём браузеру открыть файл, если промахнулись мимо зоны
+window.addEventListener('dragover', e => e.preventDefault());
+window.addEventListener('drop', e => e.preventDefault());
+
+function loadFile(f){
+  if (!f) return;
+  if (S.busy){ banner('busy','warn','Дождитесь окончания текущей операции.'); return; }
+  dropBanner('playback'); dropBanner('autoplay'); dropBanner('nocodec');
+
+  if (S.url){ try { URL.revokeObjectURL(S.url); } catch(e){} }
+  S.file = f;
+  S.url  = URL.createObjectURL(f);
+  S.cues = [];
+  renderCues();
+
+  const type = f.type || '';
+  const can  = type ? video.canPlayType(type) : '';
+  if (!type || can === ''){
+    banner('nocodec','warn',
+      '<b>Возможно, браузер не воспроизведёт этот файл.</b> ' +
+      (type ? 'Тип «' + esc(type) + '» не заявлен как поддерживаемый. ' : 'Тип файла не определён. ') +
+      'Формат MKV и экзотические кодеки чаще всего не открываются. Если видео не появится — перекодируйте его в MP4 (H.264 + AAC).');
+  }
+
+  const info = $('#fileinfo');
+  info.className = 'fileinfo on';
+  info.innerHTML = '📄 <b>' + esc(f.name) + '</b> — ' + fmtSize(f.size) + (type ? ' · ' + esc(type) : '');
+
+  video.src = S.url;
+  try { video.load(); } catch(e){}
+}
+
+video.addEventListener('error', () => {
+  const codes = {1:'загрузка прервана', 2:'ошибка сети', 3:'ошибка декодирования', 4:'формат не поддерживается браузером'};
+  const c = video.error ? video.error.code : 0;
+  banner('playback','err',
+    '<b>Видео не открылось.</b> Причина: ' + (codes[c] || 'неизвестна') + '. ' +
+    'Скорее всего, браузер не умеет этот контейнер или кодек (частый случай — MKV, HEVC, AC-3). ' +
+    'Перекодируйте файл в MP4 (H.264 + AAC) — например, командой:<br>' +
+    '<code class="mono">ffmpeg -i вход.mkv -c:v libx264 -c:a aac выход.mp4</code>');
+  $('#tools').classList.add('dis');
+});
+
+video.addEventListener('loadedmetadata', onMeta);
+
+async function onMeta(){
+  // некоторые WebM отдают Infinity — «прогреваем» длительность перемоткой
+  if (!isFinite(video.duration)){
+    await new Promise(res => {
+      const done = () => { video.removeEventListener('durationchange', h); res(); };
+      const h = () => { if (isFinite(video.duration)) done(); };
+      video.addEventListener('durationchange', h);
+      try { video.currentTime = 1e6; } catch(e){}
+      setTimeout(done, 2500);
+    });
+    try { video.currentTime = 0; } catch(e){}
+  }
+
+  S.duration = isFinite(video.duration) ? video.duration : 0;
+  S.vw = video.videoWidth  || 0;
+  S.vh = video.videoHeight || 0;
+  S.hasVideoTrack = S.vw > 0 && S.vh > 0;
+
+  if (!S.hasVideoTrack){
+    banner('playback','err','<b>В файле не найдена видеодорожка</b> (или браузер не смог её декодировать). Попробуйте другой файл или перекодируйте его в MP4.');
+    return;
+  }
+  dropBanner('playback');
+
+  S.start = 0;
+  S.end   = Math.min(S.duration, 30) || S.duration;
+  S.pan   = 0.5;
+  $('#pan').value = 0.5; updatePanLabel();
+
+  const seek = $('#seek');
+  seek.min = 0; seek.max = String(S.duration || 1); seek.step = '0.001'; seek.value = '0';
+  seek.disabled = false;
+  $('#btnPlay').disabled = false;
+  $('#btnClip').disabled = false;
+  $('#tools').classList.remove('dis');
+
+  syncTrimInputs();
+  resizePreview();
+  drawPreview();
+  startLoop();
+
+  $('#fileinfo').innerHTML += ' · ' + S.vw + '×' + S.vh + ' · ' + fmtTime(S.duration);
+  if (window.__SVM) window.__SVM.ready = true;
+}
+
+/* ---------------------------- размеры вывода ----------------------------- */
+function cropRect(){
+  const vw = S.vw, vh = S.vh;
+  if (S.crop === 'original') return { sx:0, sy:0, sw:vw, sh:vh };
+  const target = 9 / 16, srcA = vw / vh;
+  if (srcA > target){                       // источник шире, чем 9:16 — режем по бокам
+    const sw = vh * target;
+    return { sx: S.pan * (vw - sw), sy: 0, sw, sh: vh };
+  }
+  const sh = vw / target;                   // источник уже — режем сверху/снизу
+  return { sx: 0, sy: S.pan * (vh - sh), sw: vw, sh };
+}
+const even = n => Math.max(2, Math.round(n / 2) * 2);
+
+function outSize(){
+  const r = cropRect();
+  const q = parseInt($('#selRes').value, 10) === 720 ? 720 : 1080;
+  if (S.crop === 'vertical') return { W: q, H: even(q * 16 / 9) };
+  const H = Math.min(q, r.sh);              // исходный формат не растягиваем вверх
+  return { W: even(H * r.sw / r.sh), H: even(H) };
+}
+
+function resizePreview(){
+  const r = cropRect();
+  if (!r.sw || !r.sh) return;
+  const maxH = 640, maxW = 520;
+  let h = maxH, w = h * r.sw / r.sh;
+  if (w > maxW){ w = maxW; h = w * r.sh / r.sw; }
+  preview.width  = Math.round(w);
+  preview.height = Math.round(h);
+}
+
+/* ------------------------------- отрисовка ------------------------------- */
+function drawFrame(ctx, W, H, tClip, drawSubs){
+  ctx.save();
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, W, H);
+  const r = cropRect();
+  if (S.hasVideoTrack && video.readyState >= 2){
+    try { ctx.drawImage(video, r.sx, r.sy, r.sw, r.sh, 0, 0, W, H); } catch(e){}
+  }
+  ctx.restore();
+  if (drawSubs !== false) drawSubtitles(ctx, W, H, tClip);
+}
+
+function cueAt(t){
+  for (let i = S.cues.length - 1; i >= 0; i--){
+    const c = S.cues[i];
+    if (t >= c.start && t < c.end) return c;
+  }
+  return null;
+}
+
+function wrapCue(ctx, words, maxW){
+  const spaceW = ctx.measureText(' ').width;
+  const lines = [];
+  let line = [], w = 0;
+  for (const word of words){
+    const txt = S.style.upper ? word.text.toUpperCase() : word.text;
+    const ww  = ctx.measureText(txt).width;
+    if (line.length && w + spaceW + ww > maxW){ lines.push({ words: line, width: w }); line = []; w = 0; }
+    line.push({ text: txt, start: word.start, end: word.end, w: ww });
+    w = line.length === 1 ? ww : w + spaceW + ww;
+  }
+  if (line.length) lines.push({ words: line, width: w });
+  return { lines, spaceW };
+}
+
+function drawSubtitles(ctx, W, H, t){
+  const cue = cueAt(t);
+  if (!cue || !cue.words.length) return;
+
+  const fs = Math.max(8, H * S.style.size / 100);
+  ctx.save();
+  ctx.font = '900 ' + fs + 'px "Segoe UI","Arial Black",Roboto,Arial,sans-serif';
+  ctx.textBaseline = 'alphabetic';
+  ctx.lineJoin = 'round';
+  ctx.miterLimit = 2;
+
+  const maxW = W * 0.86;
+  const { lines, spaceW } = wrapCue(ctx, cue.words, maxW);
+  const lh = fs * 1.2;
+  const blockH = lines.length * lh;
+  let top = H * S.style.pos / 100 - blockH / 2;
+  top = clamp(top, fs * 0.25, Math.max(fs * 0.25, H - blockH - fs * 0.25));
+
+  // 1) подложки
+  if (S.style.box){
+    ctx.fillStyle = 'rgba(0,0,0,0.55)';
+    const padX = fs * 0.36, padY = fs * 0.1;
+    lines.forEach((ln, i) => {
+      const x = (W - ln.width) / 2 - padX;
+      const y = top + i * lh - padY;
+      const w = ln.width + padX * 2, h = lh + padY;
+      const rad = Math.min(fs * 0.28, h / 2);
+      ctx.beginPath();
+      if (ctx.roundRect) ctx.roundRect(x, y, w, h, rad);
+      else ctx.rect(x, y, w, h);
+      ctx.fill();
+    });
+  }
+
+  // 2) текст с обводкой и подсветкой активного слова
+  ctx.shadowColor = 'rgba(0,0,0,0.65)';
+  ctx.shadowBlur  = fs * 0.16;
+  ctx.lineWidth   = fs * 0.17;
+  ctx.strokeStyle = '#000';
+  lines.forEach((ln, i) => {
+    const baseY = top + i * lh + fs * 0.86;
+    let x = (W - ln.width) / 2;
+    for (const word of ln.words){
+      ctx.strokeText(word.text, x, baseY);
+      x += word.w + spaceW;
+    }
+    x = (W - ln.width) / 2;
+    ctx.shadowBlur = 0;
+    for (const word of ln.words){
+      const act = t >= word.start && t < word.end;
+      ctx.fillStyle = act ? S.style.active : S.style.color;
+      ctx.fillText(word.text, x, baseY);
+      x += word.w + spaceW;
+    }
+    ctx.shadowBlur = fs * 0.16;
+  });
+  ctx.restore();
+}
+
+function drawPreview(){
+  drawFrame(pctx, preview.width, preview.height, video.currentTime - S.start);
+}
+
+/* ------------------------------ главный цикл ----------------------------- */
+let loopOn = false;
+function startLoop(){
+  if (loopOn) return;
+  loopOn = true;
+  const tick = () => {
+    if (!loopOn) return;
+    drawPreview();
+    updateTimeUi();
+    if (S.playingClip && video.currentTime >= S.end - 0.01){
+      S.playingClip = false;
+      video.pause();
+    }
+    requestAnimationFrame(tick);
+  };
+  requestAnimationFrame(tick);
+}
+
+function updateTimeUi(){
+  const d = S.duration || 0;
+  $('#tCur').textContent = fmtTime(video.currentTime) + ' / ' + fmtTime(d);
+  const seek = $('#seek');
+  if (document.activeElement !== seek) seek.value = String(video.currentTime);
+  if (d > 0){
+    $('#tlSel').style.left  = (S.start / d * 100) + '%';
+    $('#tlSel').style.width = ((S.end - S.start) / d * 100) + '%';
+    $('#tlHead').style.left = (clamp(video.currentTime / d, 0, 1) * 100) + '%';
+    $('#tlLab').textContent = '';
+  }
+  $('#btnPlay').textContent = video.paused ? '▶ Играть' : '⏸ Пауза';
+  highlightCue();
+}
+
+/* ---------------------------- перемотка/плеер ---------------------------- */
+$('#seek').addEventListener('input', e => { seekTo(parseFloat(e.target.value)); });
+
+function seekTo(t){
+  if (!S.duration) return;
+  S.playingClip = false;
+  try { video.currentTime = clamp(t, 0, S.duration); } catch(e){}
+}
+
+const tlEl = $('#tl');
+function tlSeek(clientX){
+  const r = tlEl.getBoundingClientRect();
+  seekTo(clamp((clientX - r.left) / r.width, 0, 1) * S.duration);
+}
+let tlDrag = false;
+tlEl.addEventListener('pointerdown', e => {
+  if (!S.duration) return;
+  tlDrag = true; tlEl.setPointerCapture(e.pointerId); tlSeek(e.clientX);
+});
+tlEl.addEventListener('pointermove', e => { if (tlDrag) tlSeek(e.clientX); });
+tlEl.addEventListener('pointerup',   () => { tlDrag = false; });
+tlEl.addEventListener('pointercancel', () => { tlDrag = false; });
+
+$('#btnPlay').addEventListener('click', async () => {
+  resumeAudio();
+  if (video.paused){ S.playingClip = false; await safePlay(); }
+  else video.pause();
+});
+
+$('#btnClip').addEventListener('click', async () => {
+  resumeAudio();
+  if (S.playingClip){ S.playingClip = false; video.pause(); return; }
+  try { video.currentTime = S.start; } catch(e){}
+  S.playingClip = true;
+  await safePlay();
+});
+
+async function safePlay(){
+  try {
+    await video.play();
+    dropBanner('autoplay');
+    return true;
+  } catch(err){
+    if (err && err.name === 'NotAllowedError'){
+      banner('autoplay','warn','<b>Браузер заблокировал автозапуск.</b> Нажмите «▶ Играть» ещё раз или кликните по странице — после этого воспроизведение и экспорт заработают.');
+    } else {
+      banner('autoplay','err','<b>Не удалось запустить воспроизведение:</b> ' + esc(err && err.message || err));
+    }
+    return false;
+  }
+}
+
+function seekedOnce(){
+  return new Promise(res => {
+    let done = false;
+    const h = () => { if (done) return; done = true; video.removeEventListener('seeked', h); res(); };
+    video.addEventListener('seeked', h);
+    setTimeout(h, 4000);
+  });
+}
+
+/* ------------------------------ границы клипа ---------------------------- */
+function syncTrimInputs(){
+  $('#inStart').value = S.start.toFixed(2);
+  $('#inEnd').value   = S.end.toFixed(2);
+  $('#inDur').value   = (S.end - S.start).toFixed(2) + ' с';
+  $('#inStart').max = String(S.duration);
+  $('#inEnd').max   = String(S.duration);
+}
+function setTrim(a, b){
+  const MIN = 0.2;
+  a = clamp(a, 0, Math.max(0, S.duration - MIN));
+  b = clamp(b, a + MIN, S.duration || a + MIN);
+  S.start = a; S.end = b;
+  syncTrimInputs();
+  clampCues();
+  renderCues();
+}
+$('#btnSetStart').addEventListener('click', () => setTrim(video.currentTime, Math.max(S.end, video.currentTime + 0.2)));
+$('#btnSetEnd')  .addEventListener('click', () => setTrim(Math.min(S.start, video.currentTime - 0.2), video.currentTime));
+$('#inStart').addEventListener('change', e => setTrim(parseFloat(e.target.value) || 0, S.end));
+$('#inEnd')  .addEventListener('change', e => setTrim(S.start, parseFloat(e.target.value) || 0));
+
+/* ------------------------------ кадрирование ----------------------------- */
+$$('#segCrop button').forEach(b => b.addEventListener('click', () => {
+  $$('#segCrop button').forEach(x => x.classList.toggle('on', x === b));
+  S.crop = b.dataset.v;
+  $('#panBox').style.display = S.crop === 'vertical' ? '' : 'none';
+  resizePreview(); drawPreview();
+}));
+$('#pan').addEventListener('input', e => { S.pan = parseFloat(e.target.value); updatePanLabel(); drawPreview(); });
+function updatePanLabel(){
+  const v = S.pan;
+  $('#panVal').textContent = v < 0.2 ? 'левый край' : v < 0.42 ? 'левее центра'
+    : v <= 0.58 ? 'центр' : v <= 0.8 ? 'правее центра' : 'правый край';
+}
+
+/* -------------------------------- стили ---------------------------------- */
+function bindStyle(id, key, fn, label, suffix){
+  const el = $(id);
+  const upd = () => {
+    S.style[key] = fn(el);
+    if (label) $(label).textContent = (typeof S.style[key] === 'number' ? S.style[key] : '') + (suffix || '');
+    drawPreview();
+  };
+  el.addEventListener('input', upd);
+  el.addEventListener('change', upd);
+  upd();
+}
+bindStyle('#stSize',  'size',   el => parseFloat(el.value), '#stSizeVal', '%');
+bindStyle('#stPos',   'pos',    el => parseFloat(el.value), '#stPosVal',  '%');
+bindStyle('#stColor', 'color',  el => el.value);
+bindStyle('#stActive','active', el => el.value);
+bindStyle('#stBox',   'box',    el => el.checked);
+bindStyle('#stUpper', 'upper',  el => el.checked);
+$('#selRes').addEventListener('change', () => { /* влияет только на экспорт */ });
+
+/* ------------------------- редактор субтитров ---------------------------- */
+const cuesEl = $('#cues');
+
+function clipDur(){ return Math.max(0.2, S.end - S.start); }
+
+function makeWords(text, a, b){
+  const parts = String(text).trim().split(/\s+/).filter(Boolean);
+  if (!parts.length) return [];
+  const step = (b - a) / parts.length;
+  return parts.map((w, i) => ({ text: w, start: a + i * step, end: a + (i + 1) * step }));
+}
+function cueText(c){ return c.words.map(w => w.text).join(' '); }
+
+function clampCues(){
+  const D = clipDur();
+  S.cues.forEach(c => {
+    c.start = clamp(c.start, 0, D);
+    c.end   = clamp(c.end, c.start + 0.05, D);
+    c.words.forEach(w => { w.start = clamp(w.start, c.start, c.end); w.end = clamp(w.end, w.start, c.end); });
+  });
+  S.cues.sort((x, y) => x.start - y.start);
+}
+
+function renderCues(){
+  clampCues();
+  $('#cueCount').textContent = S.cues.length + ' ' +
+    (S.cues.length % 10 === 1 && S.cues.length % 100 !== 11 ? 'строка' :
+     [2,3,4].indexOf(S.cues.length % 10) >= 0 && [12,13,14].indexOf(S.cues.length % 100) < 0 ? 'строки' : 'строк');
+
+  if (!S.cues.length){
+    cuesEl.innerHTML = '<div class="cues-empty">Субтитров пока нет. Распознайте речь или добавьте строки вручную.</div>';
+    return;
+  }
+  let html = '<div class="cue-head"><span>начало</span><span>конец</span><span>текст</span><span></span></div>';
+  S.cues.forEach((c, i) => {
+    html += '<div class="cue" data-i="' + i + '">' +
+      '<input class="t" type="number" step="0.05" min="0" value="' + c.start.toFixed(2) + '" data-k="start" aria-label="Начало">' +
+      '<input class="t" type="number" step="0.05" min="0" value="' + c.end.toFixed(2)   + '" data-k="end"   aria-label="Конец">' +
+      '<input type="text" value="' + esc(cueText(c)) + '" data-k="text" aria-label="Текст">' +
+      '<button class="del" data-k="del" title="Удалить строку" aria-label="Удалить строку">✕</button>' +
+    '</div>';
+  });
+  cuesEl.innerHTML = html;
+}
+
+cuesEl.addEventListener('change', e => {
+  const row = e.target.closest('.cue'); if (!row) return;
+  const i = +row.dataset.i, c = S.cues[i], k = e.target.dataset.k;
+  if (!c) return;
+  if (k === 'start' || k === 'end'){
+    const v = parseFloat(e.target.value);
+    if (isFinite(v)) c[k] = v;
+    if (c.end <= c.start) c.end = c.start + 0.3;
+    c.words = makeWords(cueText(c), c.start, c.end);
+  } else if (k === 'text'){
+    c.words = makeWords(e.target.value, c.start, c.end);
+  }
+  renderCues();
+  drawPreview();
+});
+cuesEl.addEventListener('input', e => {
+  if (e.target.dataset.k !== 'text') return;
+  const row = e.target.closest('.cue'); if (!row) return;
+  const c = S.cues[+row.dataset.i]; if (!c) return;
+  c.words = makeWords(e.target.value, c.start, c.end);
+  drawPreview();
+});
+cuesEl.addEventListener('click', e => {
+  if (e.target.dataset.k !== 'del') return;
+  const row = e.target.closest('.cue');
+  S.cues.splice(+row.dataset.i, 1);
+  renderCues(); drawPreview();
+});
+
+function highlightCue(){
+  const t = video.currentTime - S.start;
+  const cur = cueAt(t);
+  $$('.cue', cuesEl).forEach(row => {
+    row.classList.toggle('act', cur && S.cues[+row.dataset.i] === cur);
+  });
+}
+
+$('#btnAddCue').addEventListener('click', () => {
+  const D = clipDur();
+  const last = S.cues.length ? S.cues[S.cues.length - 1].end : 0;
+  const a = clamp(last + 0.05, 0, Math.max(0, D - 0.5));
+  const b = clamp(a + 1.5, a + 0.3, D);
+  S.cues.push({ start: a, end: b, words: makeWords('новая строка', a, b) });
+  renderCues();
+  const rows = $$('.cue', cuesEl);
+  if (rows.length) rows[rows.length - 1].scrollIntoView({ block: 'nearest' });
+});
+$('#btnClearCues').addEventListener('click', () => { S.cues = []; renderCues(); drawPreview(); });
+
+/* --------------------------- аудиограф (один раз) ------------------------ */
+let AG = null;
+function audioGraph(){
+  if (AG) return AG;
+  const Ctx = window.AudioContext || window.webkitAudioContext;
+  if (!Ctx) throw new Error('Web Audio API недоступен в этом браузере');
+  const actx = new Ctx();
+  const source = actx.createMediaElementSource(video);
+  const monitor = actx.createGain();
+  source.connect(monitor);
+  monitor.connect(actx.destination);
+  AG = { actx, source, monitor };
+  return AG;
+}
+function resumeAudio(){
+  try { if (AG && AG.actx.state === 'suspended') AG.actx.resume(); } catch(e){}
+}
+['click','keydown','touchend'].forEach(ev =>
+  document.addEventListener(ev, resumeAudio, { passive: true }));
+
+/* ------------------- снятие звука выбранного отрывка ---------------------- */
+/* MediaElementSource → ScriptProcessor (сэмплы) → микс в моно → 16 кГц.
+   При скорости >1 отключаем сохранение высоты тона: элемент отдаёт весь
+   отрывок «сжатым» по времени в speed раз, поэтому те же сэмплы мы читаем
+   как поток с частотой sampleRate/speed — темп и тон возвращаются к норме,
+   а ждать приходится в speed раз меньше.                                   */
+let asrAbort = false;
+
+async function captureSegmentAudio(onProgress){
+  const g = audioGraph();
+  await g.actx.resume().catch(() => {});
+
+  let speed = parseFloat($('#selSpeed').value) || 1;
+  if (!('preservesPitch' in video) && !('webkitPreservesPitch' in video)) speed = 1;
+
+  const proc = g.actx.createScriptProcessor(4096, 2, 2);
+  const sink = g.actx.createGain();
+  sink.gain.value = 0;
+  g.source.connect(proc);
+  proc.connect(sink);
+  sink.connect(g.actx.destination);
+
+  const chunks = [];
+  let total = 0, capturing = false;
+  proc.onaudioprocess = e => {
+    if (!capturing) return;
+    const ib = e.inputBuffer;
+    const L = ib.getChannelData(0);
+    const R = ib.numberOfChannels > 1 ? ib.getChannelData(1) : L;
+    const m = new Float32Array(L.length);
+    for (let i = 0; i < L.length; i++) m[i] = (L[i] + R[i]) * 0.5;
+    chunks.push(m); total += m.length;
+  };
+
+  const prevRate = video.playbackRate;
+  const prevMon  = g.monitor.gain.value;
+  const wasPitch = 'preservesPitch' in video ? video.preservesPitch : null;
+
+  const cleanup = () => {
+    capturing = false;
+    proc.onaudioprocess = null;
+    try { g.source.disconnect(proc); } catch(e){}
+    try { proc.disconnect(); } catch(e){}
+    try { sink.disconnect(); } catch(e){}
+    video.pause();
+    video.playbackRate = prevRate;
+    if (wasPitch !== null) video.preservesPitch = wasPitch;
+    if ('webkitPreservesPitch' in video) video.webkitPreservesPitch = true;
+    g.monitor.gain.value = prevMon;
+  };
+
+  try {
+    g.monitor.gain.value = 0;                 // молча
+    S.playingClip = false;
+    video.currentTime = S.start;
+    await seekedOnce();
+    if (speed !== 1){
+      if ('preservesPitch' in video) video.preservesPitch = false;
+      if ('webkitPreservesPitch' in video) video.webkitPreservesPitch = false;
+      // если браузер не дал отключить сохранение тона — ускорение испортит
+      // высоту звука и тайминги, поэтому честно откатываемся на 1×
+      if ('preservesPitch' in video && video.preservesPitch !== false) speed = 1;
+    }
+    video.playbackRate = speed;
+
+    const ok = await safePlay();
+    if (!ok) throw new Error('Браузер не дал запустить воспроизведение — нажмите «▶ Играть» и повторите.');
+
+    capturing = true;
+    const t0 = performance.now();
+    const budget = (S.end - S.start) / speed * 1000 + 15000;
+    while (video.currentTime < S.end && !video.ended && !asrAbort){
+      if (performance.now() - t0 > budget) break;
+      onProgress && onProgress(clamp((video.currentTime - S.start) / (S.end - S.start), 0, 1));
+      await sleep(25);
+    }
+    video.pause();                            // дальше в графе только тишина
+    await sleep(200);                         // добираем хвост буферов
+  } finally {
+    cleanup();
+  }
+  if (asrAbort) throw new Error('Отменено');
+  if (!total) throw new Error('Не удалось снять звук: в файле нет аудиодорожки или она не декодируется.');
+
+  const merged = new Float32Array(total);
+  let off = 0;
+  for (const c of chunks){ merged.set(c, off); off += c.length; }
+
+  // хвост, набранный на паузе (пока опустошались буферы), — это тишина:
+  // отрезаем всё, что длиннее отрывка, оставив небольшой запас
+  const want = Math.ceil((S.end - S.start) / speed * g.actx.sampleRate) + 2048;
+  const body = total > want ? merged.slice(0, want) : merged;
+  return resampleTo16k(body, g.actx.sampleRate / speed);
+}
+
+async function resampleTo16k(data, srcRate){
+  const TARGET = 16000;
+  if (Math.abs(srcRate - TARGET) < 1) return data;
+  const outLen = Math.max(1, Math.floor(data.length * TARGET / srcRate));
+  const OC = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+  if (OC){
+    try {
+      const oc  = new OC(1, outLen, TARGET);
+      const buf = oc.createBuffer(1, data.length, srcRate);
+      buf.copyToChannel ? buf.copyToChannel(data, 0) : buf.getChannelData(0).set(data);
+      const src = oc.createBufferSource();
+      src.buffer = buf; src.connect(oc.destination); src.start();
+      const rendered = await oc.startRendering();
+      return rendered.getChannelData(0).slice();
+    } catch(e){ /* падаем в линейную интерполяцию ниже */ }
+  }
+  const out = new Float32Array(outLen), ratio = srcRate / TARGET;
+  for (let i = 0; i < outLen; i++){
+    const p = i * ratio, i0 = Math.floor(p), f = p - i0;
+    out[i] = (data[i0] || 0) * (1 - f) + (data[i0 + 1] || 0) * f;
+  }
+  return out;
+}
+
+/* --------------------------- распознавание речи -------------------------- */
+const CDN = [
+  'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.7.6/dist/transformers.min.js',
+  'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3/dist/transformers.min.js',
+  'https://cdn.jsdelivr.net/npm/@huggingface/transformers/dist/transformers.min.js'
+];
+let TJS = null, pipeCache = { key: null, pipe: null };
+
+async function loadTransformers(){
+  if (TJS) return TJS;
+  let lastErr = null;
+  for (const url of CDN){
+    try { TJS = await import(/* webpackIgnore: true */ url); break; }
+    catch(e){ lastErr = e; }
+  }
+  if (!TJS) throw Object.assign(new Error('CDN недоступен'), { cdn: true, cause: lastErr });
+  TJS.env.allowLocalModels = false;
+  if (TJS.env.backends && TJS.env.backends.onnx && TJS.env.backends.onnx.wasm){
+    TJS.env.backends.onnx.wasm.numThreads = Math.min(4, navigator.hardwareConcurrency || 2);
+  }
+  return TJS;
+}
+
+async function getPipe(model, useGpu, onProgress){
+  const key = model + '|' + (useGpu ? 'gpu' : 'cpu');
+  if (pipeCache.key === key && pipeCache.pipe) return pipeCache.pipe;
+  const T = await loadTransformers();
+  const opts = {
+    dtype: useGpu ? { encoder_model: 'fp32', decoder_model_merged: 'fp32' }
+                  : { encoder_model: 'fp32', decoder_model_merged: 'q8' },
+    progress_callback: onProgress
+  };
+  if (useGpu) opts.device = 'webgpu';
+  let pipe;
+  try {
+    pipe = await T.pipeline('automatic-speech-recognition', model, opts);
+  } catch(e){
+    if (useGpu){                                        // WebGPU не завёлся — на CPU
+      setAsrStatus('WebGPU не запустился, переключаюсь на обычный режим…');
+      return getPipe(model, false, onProgress);
+    }
+    throw e;
+  }
+  if (pipeCache.pipe && pipeCache.pipe.dispose){ try { pipeCache.pipe.dispose(); } catch(e){} }
+  pipeCache = { key, pipe };
+  return pipe;
+}
+
+function setAsrStatus(t){ $('#asrStatus').textContent = t; }
+function setAsrProg(p){
+  const box = $('#asrProg');
+  if (p === null){ box.className = 'prog'; return; }
+  box.className = 'prog on';
+  box.firstElementChild.style.width = clamp(p * 100, 0, 100) + '%';
+}
+
+$('#chkGpu').disabled = !navigator.gpu;
+$('#gpuNote').textContent = navigator.gpu ? '' : '(недоступно в этом браузере)';
+
+$('#btnAsrStop').addEventListener('click', () => { asrAbort = true; setAsrStatus('Отмена…'); });
+
+$('#btnAsr').addEventListener('click', async () => {
+  if (S.busy) return;
+  if (!S.hasVideoTrack){ banner('asr','warn','Сначала выберите видео.'); return; }
+  if (S.end - S.start < 0.3){ banner('asr','warn','Отрывок слишком короткий.'); return; }
+  dropBanner('asr'); dropBanner('cdn');
+
+  S.busy = true; asrAbort = false;
+  $('#btnAsr').disabled = true;
+  $('#btnAsrStop').style.display = '';
+  setAsrProg(0);
+
+  try {
+    // 1. звук
+    setAsrStatus('Снимаю звук отрывка…');
+    const audio = await captureSegmentAudio(p => {
+      setAsrProg(p * 0.3);
+      setAsrStatus('Снимаю звук отрывка… ' + Math.round(p * 100) + '%');
+    });
+    if (asrAbort) throw new Error('Отменено');
+
+    // 2. модель
+    setAsrStatus('Загружаю модель распознавания…');
+    const model = $('#selModel').value;
+    const useGpu = $('#chkGpu').checked && !!navigator.gpu;
+    const files = {};
+    const pipe = await getPipe(model, useGpu, info => {
+      if (info && info.status === 'progress' && info.file){
+        files[info.file] = info.progress || 0;
+        const vals = Object.values(files);
+        const avg = vals.reduce((a, b) => a + b, 0) / vals.length;
+        setAsrProg(0.3 + (avg / 100) * 0.35);
+        setAsrStatus('Скачиваю модель: ' + Math.round(avg) + '% (один раз, дальше из кеша)');
+      } else if (info && info.status === 'ready'){
+        setAsrStatus('Модель готова, распознаю…');
+      }
+    });
+    if (asrAbort) throw new Error('Отменено');
+
+    // 3. распознавание
+    setAsrProg(0.68);
+    setAsrStatus('Распознаю речь… (это самая долгая часть)');
+    const lang = $('#selLang').value;
+    const base = { chunk_length_s: 30, stride_length_s: 5, task: 'transcribe' };
+    if (lang !== 'auto') base.language = lang;
+
+    let out, wordLevel = true;
+    try {
+      out = await pipe(audio, Object.assign({}, base, { return_timestamps: 'word' }));
+      if (!out || !out.chunks || !out.chunks.length) throw new Error('нет пословных меток');
+    } catch(e){
+      wordLevel = false;
+      setAsrStatus('Пословные метки недоступны — беру посегментные…');
+      out = await pipe(audio, Object.assign({}, base, { return_timestamps: true }));
+    }
+    if (asrAbort) throw new Error('Отменено');
+
+    const words = chunksToWords(out, wordLevel, Math.max(S.end - S.start, audio.length / 16000));
+    if (!words.length){
+      banner('asr','info','<b>Речь не распознана.</b> Возможно, в отрывке нет разборчивого голоса. Попробуйте модель точнее (small), задайте язык явно или впишите субтитры вручную.');
+      setAsrStatus('Готово: реплик не найдено.');
+    } else {
+      S.cues = groupWords(words);
+      renderCues();
+      setAsrStatus('Готово: ' + S.cues.length + ' реплик' + (wordLevel ? ' (пословные тайминги)' : ' (посегментные тайминги)'));
+    }
+    setAsrProg(1);
+    setTimeout(() => setAsrProg(null), 900);
+
+  } catch(err){
+    setAsrProg(null);
+    const msg = String(err && err.message || err);
+    if (err && err.cdn){
+      banner('cdn','err',
+        '<b>Не удалось загрузить библиотеку распознавания речи с CDN.</b> Проверьте интернет или блокировщики. ' +
+        'Всё остальное — обрезка, кадрирование, ручные субтитры и экспорт — работает офлайн: ' +
+        'нажмите «＋ Добавить строку» в разделе «Субтитры» и впишите текст сами.');
+      setAsrStatus('CDN недоступен — впишите субтитры вручную.');
+    } else if (msg === 'Отменено'){
+      setAsrStatus('Отменено.');
+    } else {
+      banner('asr','err','<b>Распознавание не удалось.</b> ' + esc(msg) +
+        '<br>Можно выбрать модель полегче (tiny), укоротить отрывок или вписать субтитры вручную.');
+      setAsrStatus('Ошибка: ' + msg);
+    }
+  } finally {
+    S.busy = false; asrAbort = false;
+    $('#btnAsr').disabled = false;
+    $('#btnAsrStop').style.display = 'none';
+    drawPreview();
+  }
+});
+
+/* chunks → плоский список слов с таймингами (в секундах от начала клипа) */
+function chunksToWords(out, wordLevel, dur){
+  const words = [];
+  const chunks = (out && out.chunks) || [];
+  if (wordLevel){
+    chunks.forEach((c, i) => {
+      const txt = String(c.text || '').trim();
+      if (!txt) return;
+      const ts = c.timestamp || [];
+      let a = typeof ts[0] === 'number' ? ts[0] : null;
+      let b = typeof ts[1] === 'number' ? ts[1] : null;
+      if (a === null) a = words.length ? words[words.length - 1].end : 0;
+      if (b === null || b <= a) b = a + Math.max(0.18, txt.length * 0.06);
+      words.push({ text: txt, start: a, end: b });
+    });
+  } else {
+    chunks.forEach((c, i) => {
+      const txt = String(c.text || '').trim();
+      if (!txt) return;
+      const ts = c.timestamp || [];
+      let a = typeof ts[0] === 'number' ? ts[0] : (words.length ? words[words.length - 1].end : 0);
+      let b = typeof ts[1] === 'number' ? ts[1] : null;
+      if (b === null || b <= a){
+        const next = chunks[i + 1];
+        b = next && next.timestamp && typeof next.timestamp[0] === 'number' ? next.timestamp[0] : Math.min(dur, a + 3);
+      }
+      const parts = txt.split(/\s+/).filter(Boolean);
+      const step = (b - a) / Math.max(1, parts.length);
+      parts.forEach((p, k) => words.push({ text: p, start: a + k * step, end: a + (k + 1) * step }));
+    });
+  }
+  // страхуемся от кривых таймингов
+  let prev = 0;
+  words.forEach(w => {
+    w.start = clamp(w.start, prev, dur);
+    w.end   = clamp(w.end, w.start + 0.05, dur);
+    prev = w.start;
+  });
+  return words.filter(w => w.text);
+}
+
+/* слова → реплики по 3–4 слова (стиль TikTok) */
+function groupWords(words, maxWords){
+  maxWords = maxWords || 4;
+  const cues = [];
+  let cur = [];
+  const flush = () => {
+    if (!cur.length) return;
+    cues.push({ start: cur[0].start, end: cur[cur.length - 1].end, words: cur.map(w => ({ ...w })) });
+    cur = [];
+  };
+  for (let i = 0; i < words.length; i++){
+    const w = words[i], next = words[i + 1];
+    cur.push(w);
+    const sentenceEnd = /[.!?…:;]$/.test(w.text);
+    const gap = next ? next.start - w.end : Infinity;
+    const long = cur.reduce((a, x) => a + x.text.length, 0) > 26;
+    if (!next || cur.length >= maxWords || long || (sentenceEnd && cur.length >= 2) || (gap > 0.55 && cur.length >= 1)) flush();
+  }
+  // подтягиваем конец реплики до следующей, если пауза крошечная
+  for (let i = 0; i < cues.length; i++){
+    const c = cues[i], n = cues[i + 1];
+    if (c.end <= c.start) c.end = c.start + 0.3;
+    if (n && n.start - c.end < 0.12) c.end = n.start;
+    c.words.forEach(w => { if (w.end <= w.start) w.end = w.start + 0.12; });
+  }
+  return cues;
+}
+
+/* --------------------------------- экспорт -------------------------------- */
+const MIME_MP4 = [
+  'video/mp4;codecs=avc1.42E01E,mp4a.40.2',
+  'video/mp4;codecs=avc1.4d002a,mp4a.40.2',
+  'video/mp4;codecs=avc1.640028,mp4a.40.2',
+  'video/mp4;codecs=h264,aac',
+  'video/mp4'
+];
+const MIME_WEBM = [
+  'video/webm;codecs=vp9,opus',
+  'video/webm;codecs=vp8,opus',
+  'video/webm;codecs=vp9',
+  'video/webm'
+];
+function pickMime(preferMp4){
+  const list = preferMp4 ? MIME_MP4.concat(MIME_WEBM) : MIME_WEBM.concat(MIME_MP4);
+  for (const m of list){
+    try { if (window.MediaRecorder && MediaRecorder.isTypeSupported(m)) return m; } catch(e){}
+  }
+  return '';
+}
+function setExpStatus(t){ $('#expStatus').textContent = t; }
+function setExpProg(p){
+  const box = $('#expProg');
+  if (p === null){ box.className = 'prog'; return; }
+  box.className = 'prog on';
+  box.firstElementChild.style.width = clamp(p * 100, 0, 100) + '%';
+}
+
+let exportAbort = false;
+$('#btnExportStop').addEventListener('click', () => { exportAbort = true; setExpStatus('Останавливаю…'); });
+
+$('#btnExport').addEventListener('click', async () => {
+  if (S.busy) return;
+  if (!S.hasVideoTrack){ banner('exp','warn','Сначала выберите видео.'); return; }
+  if (!window.MediaRecorder){
+    banner('exp','err','<b>Этот браузер не поддерживает MediaRecorder</b> — запись видео невозможна. Откройте сайт в Chrome, Edge или Firefox.');
+    return;
+  }
+  dropBanner('exp');
+  await doExport();
+});
+
+async function doExport(){
+  S.busy = true; exportAbort = false;
+  $('#btnExport').disabled = true;
+  $('#btnExportStop').style.display = '';
+  $('#result').classList.remove('on');
+  setExpProg(0);
+
+  const size = outSize();
+  const W = size.W, H = size.H;
+  const fps = parseInt($('#selFps').value, 10) || 30;
+  const canvas = document.createElement('canvas');
+  canvas.width = W; canvas.height = H;
+  const ctx = canvas.getContext('2d', { alpha: false });
+
+  let g = null, dest = null, rec = null, raf = 0, savedMon = 1;
+
+  try {
+    setExpStatus('Готовлю дорожки…');
+    drawFrame(ctx, W, H, 0);
+
+    const vStream = canvas.captureStream(fps);
+    const tracks  = vStream.getVideoTracks().slice();
+
+    try {
+      g = audioGraph();
+      await g.actx.resume().catch(() => {});
+      dest = g.actx.createMediaStreamDestination();
+      g.source.connect(dest);
+      dest.stream.getAudioTracks().forEach(t => tracks.push(t));
+    } catch(e){
+      banner('exp','warn','<b>Звук добавить не удалось</b> (' + esc(e.message || e) + ') — клип будет записан без звука.');
+    }
+
+    const preferMp4 = $('#chkMp4').checked;
+    const mime = pickMime(preferMp4);
+    if (preferMp4 && mime.indexOf('mp4') !== 0 && mime.indexOf('video/mp4') !== 0){
+      banner('mp4','info','<b>Ваш браузер не умеет записывать MP4</b> — клип будет сохранён в WebM. Он открывается в Chrome/Edge, ВКонтакте, Telegram и YouTube; для TikTok/Instagram при необходимости перекодируйте в MP4.');
+    } else {
+      dropBanner('mp4');
+    }
+
+    const stream = new MediaStream(tracks);
+    const opts = { videoBitsPerSecond: H >= 1900 ? 10e6 : 6e6, audioBitsPerSecond: 128000 };
+    if (mime) opts.mimeType = mime;
+    rec = new MediaRecorder(stream, opts);
+
+    const parts = [];
+    rec.ondataavailable = e => { if (e.data && e.data.size) parts.push(e.data); };
+    const stopped = new Promise(res => { rec.onstop = res; });
+    rec.onerror = e => { banner('exp','err','<b>Ошибка записи:</b> ' + esc((e.error && e.error.message) || 'неизвестно')); };
+
+    // позиционируемся и запускаем
+    S.playingClip = false;
+    video.playbackRate = 1;
+    if ('preservesPitch' in video) video.preservesPitch = true;
+    video.currentTime = S.start;
+    await seekedOnce();
+    drawFrame(ctx, W, H, 0);
+
+    if (g){ savedMon = g.monitor.gain.value; g.monitor.gain.value = 0; }
+
+    const ok = await safePlay();
+    if (!ok) throw new Error('Браузер заблокировал воспроизведение. Нажмите «▶ Играть», затем повторите экспорт.');
+
+    rec.start(200);
+    setExpStatus('Записываю клип… не сворачивайте вкладку.');
+
+    const total = Math.max(0.2, S.end - S.start);
+    const t0 = performance.now();
+    const limit = total * 1000 * 3 + 20000;
+
+    await new Promise(res => {
+      const tick = () => {
+        const t = video.currentTime - S.start;
+        drawFrame(ctx, W, H, t);
+        setExpProg(clamp(t / total, 0, 1));
+        const timeUp = performance.now() - t0 > limit;
+        if (exportAbort || video.ended || video.currentTime >= S.end - 0.005 || timeUp){ res(); return; }
+        raf = requestAnimationFrame(tick);
+      };
+      raf = requestAnimationFrame(tick);
+    });
+
+    cancelAnimationFrame(raf);
+    video.pause();
+    if (g) g.monitor.gain.value = savedMon;
+    await sleep(80);
+    if (rec.state !== 'inactive') rec.stop();
+    await stopped;
+    tracks.forEach(t => { try { t.stop(); } catch(e){} });
+    if (g && dest){ try { g.source.disconnect(dest); } catch(e){} }
+
+    const type = (rec.mimeType || mime || 'video/webm').split(';')[0];
+    const blob = new Blob(parts, { type });
+    if (!blob.size) throw new Error('Запись получилась пустой. Попробуйте отрывок подлиннее или другое качество.');
+
+    const url = URL.createObjectURL(blob);
+    const outV = $('#outVideo');
+    if (outV.dataset.url) { try { URL.revokeObjectURL(outV.dataset.url); } catch(e){} }
+    outV.dataset.url = url;
+    outV.src = url;
+    const ext = type.indexOf('mp4') >= 0 ? 'mp4' : 'webm';
+    const a = $('#btnDownload');
+    a.href = url;
+    a.download = 'shorts_' + W + 'x' + H + '.' + ext;
+    $('#outInfo').textContent = W + '×' + H + ' · ' + fmtSize(blob.size) + ' · ' + ext.toUpperCase();
+    $('#result').classList.add('on');
+    setExpProg(1);
+    setExpStatus(exportAbort ? 'Остановлено — сохранена записанная часть.' : 'Готово! Проверьте результат и скачайте.');
+    $('#result').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+
+    window.__SVM.lastExport = { size: blob.size, type, W, H, ext };
+
+  } catch(err){
+    cancelAnimationFrame(raf);
+    try { video.pause(); } catch(e){}
+    if (g) g.monitor.gain.value = savedMon;
+    try { if (rec && rec.state !== 'inactive') rec.stop(); } catch(e){}
+    setExpProg(null);
+    banner('exp','err','<b>Экспорт не удался.</b> ' + esc(err && err.message || err));
+    setExpStatus('Ошибка: ' + (err && err.message || err));
+    window.__SVM.lastExport = { size: 0, error: String(err && err.message || err) };
+  } finally {
+    S.busy = false; exportAbort = false;
+    $('#btnExport').disabled = false;
+    $('#btnExportStop').style.display = 'none';
+  }
+}
+
+/* --------------------------- служебное / тесты ---------------------------- */
+window.__SVM = {
+  state: S,
+  ready: false,
+  lastExport: null,
+  setTrim, groupWords, chunksToWords, captureSegmentAudio, resampleTo16k,
+  outSize, cropRect, renderCues,
+  setCues(arr){ S.cues = arr.map(c => ({ start: c.start, end: c.end, words: makeWords(c.text, c.start, c.end) })); renderCues(); }
+};
+
+// стартовое состояние
+$('#panBox').style.display = '';
+updatePanLabel();
+renderCues();
+drawFrame(pctx, preview.width, preview.height, 0);
+
+if (!window.MediaRecorder){
+  banner('mr','warn','<b>MediaRecorder не поддерживается</b> — экспорт видео в этом браузере работать не будет. Обрезка и субтитры доступны. Рекомендуем Chrome или Edge.');
+}
+</script>
+</body>
+</html>
