@@ -1102,6 +1102,21 @@ async function getPipe(model, useGpu, onProgress){
   return pipe;
 }
 
+/* Пословные тайминги умеют отдавать только сборки *_timestamped: в их ONNX
+   выгружено кросс-внимание декодера. Веса те же, размер практически тот же,
+   поэтому берём их первыми, а обычную сборку держим как запасной вариант. */
+const asrDiag = {};
+async function getAsrPipe(model, useGpu, onProgress){
+  try {
+    return await getPipe(model + '_timestamped', useGpu, onProgress);
+  } catch(e){
+    if (e && e.cdn) throw e;
+    asrDiag.timestamped = String(e && e.message || e);
+    setAsrStatus('Сборка с пословными метками недоступна, беру обычную…');
+    return await getPipe(model, useGpu, onProgress);
+  }
+}
+
 function setAsrStatus(t){ $('#asrStatus').textContent = t; }
 function setAsrProg(p){
   const box = $('#asrProg');
@@ -1140,7 +1155,7 @@ $('#btnAsr').addEventListener('click', async () => {
     const model = $('#selModel').value;
     const useGpu = $('#chkGpu').checked && !!navigator.gpu;
     const files = {};
-    const pipe = await getPipe(model, useGpu, info => {
+    const pipe = await getAsrPipe(model, useGpu, info => {
       if (info && info.status === 'progress' && info.file){
         files[info.file] = info.progress || 0;
         const vals = Object.values(files);
@@ -1166,6 +1181,7 @@ $('#btnAsr').addEventListener('click', async () => {
       if (!out || !out.chunks || !out.chunks.length) throw new Error('нет пословных меток');
     } catch(e){
       wordLevel = false;
+      asrDiag.word = String(e && e.message || e);
       setAsrStatus('Пословные метки недоступны — беру посегментные…');
       out = await pipe(audio, Object.assign({}, base, { return_timestamps: true }));
     }
@@ -1189,8 +1205,8 @@ $('#btnAsr').addEventListener('click', async () => {
     if (err && err.cdn){
       banner('cdn','err',
         '<b>Не удалось загрузить библиотеку распознавания речи с CDN.</b> Проверьте интернет или блокировщики. ' +
-        'Всё остальное — обрезка, кадрирование, ручные субтитры и экспорт — работает офлайн: ' +
-        'нажмите «＋ Добавить строку» в разделе «Субтитры» и впишите текст сами.');
+        'Всё остальное — обрезка, кадрирование, субтитры и экспорт — работает офлайн: ' +
+        'впишите субтитры вручную — нажмите «＋ Добавить строку» в разделе «Субтитры».');
       setAsrStatus('CDN недоступен — впишите субтитры вручную.');
     } else if (msg === 'Отменено'){
       setAsrStatus('Отменено.');
@@ -1454,7 +1470,7 @@ window.__SVM = {
   ready: false,
   lastExport: null,
   setTrim, groupWords, chunksToWords, captureSegmentAudio, resampleTo16k,
-  outSize, cropRect, renderCues,
+  outSize, cropRect, renderCues, asrDiag,
   setCues(arr){ S.cues = arr.map(c => ({ start: c.start, end: c.end, words: makeWords(c.text, c.start, c.end) })); renderCues(); }
 };
 
