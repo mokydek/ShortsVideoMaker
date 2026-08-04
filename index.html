@@ -346,14 +346,20 @@ footer a{color:var(--acc)}
     <section class="card">
       <h2><i>4</i>Кадрирование</h2>
       <div class="seg" id="segCrop">
-        <button data-v="vertical" class="on">📱 Вертикально 9:16</button>
+        <button data-v="vertical" class="on">📱 9:16 обрезкой</button>
+        <button data-v="blur">🌫 9:16 с размытым фоном</button>
         <button data-v="original">🖥 Исходный формат</button>
       </div>
       <div id="panBox" style="margin-top:12px">
-        <label class="f" for="pan">Сдвиг кадра по горизонтали — <span id="panVal">центр</span></label>
+        <label class="f" for="pan"><span id="panLabel">Сдвиг кадра по горизонтали</span> — <span id="panVal">центр</span></label>
         <input type="range" id="pan" min="0" max="1" step="0.005" value="0.5">
       </div>
-      <p class="hint">В режиме 9:16 из широкого кадра вырезается вертикальная полоса — ползунком выберите, какую именно часть оставить.</p>
+      <div id="blurBox" style="margin-top:12px;display:none">
+        <label class="f" for="blurAmt">Сила размытия — <span id="blurVal">18</span></label>
+        <input type="range" id="blurAmt" min="4" max="40" step="1" value="18">
+      </div>
+      <label class="chk" style="margin-top:11px"><input type="checkbox" id="chkBars" checked> Обрезать чёрные поля в исходнике <span class="hint" style="margin:0" id="barsNote"></span></label>
+      <p class="hint" id="cropHint">В режиме обрезки из широкого кадра вырезается вертикальная полоса — ползунком выберите, какую именно часть оставить.</p>
     </section>
 
     <!-- ШАГ 5 -->
@@ -558,6 +564,8 @@ const S = {
   clips: [],
   active: 0,
   crop: 'vertical',
+  blur: 18,
+  bars: null,                                 // вшитые в исходник чёрные поля
   style: { size: 6.5, pos: 78, color: '#ffffff', active: '#ffd400', box: true, upper: false },
   playingClip: false,
   busy: false
@@ -876,39 +884,65 @@ async function onMeta(){
   resizePreview();
   drawPreview();
   startLoop();
-  analyzeWholeVideo();                        // волна и паузы — в фоне
+  applyCropUi();
+  detectBlackBars();                          // вшитые чёрные поля — в фоне
+  analyzeWholeVideo();                        // волна и паузы — тоже
 
   $('#fileinfo').innerHTML += ' · ' + S.vw + '×' + S.vh + ' · ' + fmtTime(S.duration);
   if (window.__SVM) window.__SVM.ready = true;
 }
 
 /* ---------------------------- размеры вывода ----------------------------- */
-function cropRect(){
-  const vw = S.vw, vh = S.vh;
-  if (S.crop === 'original') return { sx:0, sy:0, sw:vw, sh:vh };
-  const target = 9 / 16, srcA = vw / vh;
-  if (srcA > target){                       // источник шире, чем 9:16 — режем по бокам
-    const sw = vh * target;
-    return { sx: S.pan * (vw - sw), sy: 0, sw, sh: vh };
-  }
-  const sh = vw / target;                   // источник уже — режем сверху/снизу
-  return { sx: 0, sy: S.pan * (vh - sh), sw: vw, sh };
+/* Полезная часть кадра: если в исходнике вшиты чёрные поля (широкий фильм в
+   формате 16:9), работаем только с картинкой внутри них — иначе эти поля
+   поедут в клип и вылезут посреди вертикального кадра. */
+function contentRect(){
+  const b = (S.bars && $('#chkBars').checked) ? S.bars : { top: 0, right: 0, bottom: 0, left: 0 };
+  const sx = b.left, sy = b.top;
+  const sw = Math.max(16, S.vw - b.left - b.right);
+  const sh = Math.max(16, S.vh - b.top - b.bottom);
+  return { sx, sy, sw, sh };
 }
+
+function cropRect(){
+  const c = contentRect();
+  if (S.crop === 'original' || S.crop === 'blur') return c;
+  const target = 9 / 16, srcA = c.sw / c.sh;
+  if (srcA > target){                       // источник шире, чем 9:16 — режем по бокам
+    const sw = c.sh * target;
+    return { sx: c.sx + S.pan * (c.sw - sw), sy: c.sy, sw, sh: c.sh };
+  }
+  const sh = c.sw / target;                 // источник уже — режем сверху/снизу
+  return { sx: c.sx, sy: c.sy + S.pan * (c.sh - sh), sw: c.sw, sh };
+}
+
+/* Фон для режима с размытием — тот же кадр, растянутый «с запасом». */
+function coverRect(outW, outH){
+  const c = contentRect();
+  const target = outW / outH, srcA = c.sw / c.sh;
+  if (srcA > target){
+    const sw = c.sh * target;
+    return { sx: c.sx + (c.sw - sw) / 2, sy: c.sy, sw, sh: c.sh };
+  }
+  const sh = c.sw / target;
+  return { sx: c.sx, sy: c.sy + (c.sh - sh) / 2, sw: c.sw, sh };
+}
+
 const even = n => Math.max(2, Math.round(n / 2) * 2);
 
 function outSize(){
-  const r = cropRect();
   const q = parseInt($('#selRes').value, 10) === 720 ? 720 : 1080;
-  if (S.crop === 'vertical') return { W: q, H: even(q * 16 / 9) };
+  if (S.crop === 'vertical' || S.crop === 'blur') return { W: q, H: even(q * 16 / 9) };
+  const r = cropRect();
   const H = Math.min(q, r.sh);              // исходный формат не растягиваем вверх
   return { W: even(H * r.sw / r.sh), H: even(H) };
 }
 
 function resizePreview(){
-  const r = cropRect();
-  if (!r.sw || !r.sh) return;
+  const r = outSize();                        // предпросмотр повторяет формат вывода
+  if (!r.W || !r.H) return;
   const maxH = 640, maxW = 520;
-  let h = maxH, w = h * r.sw / r.sh;
+  let h = maxH, w = h * r.W / r.H;
   if (w > maxW){ w = maxW; h = w * r.sh / r.sw; }
   preview.width  = Math.round(w);
   preview.height = Math.round(h);
@@ -916,13 +950,57 @@ function resizePreview(){
 }
 
 /* ------------------------------- отрисовка ------------------------------- */
+/* Размытый фон делаем в два приёма: сначала кадр рисуется на крошечный
+   холст с лёгким размытием, потом растягивается на весь кадр. Размывать
+   сразу 1080x1920 в каждом кадре слишком дорого, а на глаз результат тот же. */
+const bgCanvas = document.createElement('canvas');
+const bgCtx = bgCanvas.getContext('2d', { alpha: false });
+
+function drawBlurBackground(ctx, W, H){
+  const small = 96;
+  const bw = small, bh = Math.max(2, Math.round(small * H / W));
+  if (bgCanvas.width !== bw || bgCanvas.height !== bh){
+    bgCanvas.width = bw; bgCanvas.height = bh;
+  }
+  const c = coverRect(W, H);
+  const soft = clamp(S.blur / 14, 1, 6);
+  bgCtx.filter = 'blur(' + soft.toFixed(2) + 'px)';
+  try { bgCtx.drawImage(video, c.sx, c.sy, c.sw, c.sh, -2, -2, bw + 4, bh + 4); } catch(e){}
+  bgCtx.filter = 'none';
+
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(bgCanvas, 0, 0, bw, bh, 0, 0, W, H);
+  // приглушаем фон, чтобы он не спорил с основным кадром и субтитрами
+  ctx.fillStyle = 'rgba(0,0,0,0.34)';
+  ctx.fillRect(0, 0, W, H);
+}
+
 function drawFrame(ctx, W, H, tClip, drawSubs){
   ctx.save();
   ctx.fillStyle = '#000';
   ctx.fillRect(0, 0, W, H);
-  const r = cropRect();
-  if (S.hasVideoTrack && video.readyState >= 2){
-    try { ctx.drawImage(video, r.sx, r.sy, r.sw, r.sh, 0, 0, W, H); } catch(e){}
+  const ready = S.hasVideoTrack && video.readyState >= 2;
+
+  if (S.crop === 'blur'){
+    const c = contentRect();
+    const scale = Math.min(W / c.sw, H / c.sh);
+    const dw = c.sw * scale, dh = c.sh * scale;
+    const dx = (W - dw) / 2;
+    const dy = clamp(S.pan, 0, 1) * (H - dh);   // ползунок двигает кадр по вертикали
+    if (ready){
+      drawBlurBackground(ctx, W, H);
+      ctx.save();
+      ctx.shadowColor = 'rgba(0,0,0,0.55)';
+      ctx.shadowBlur = Math.max(6, W * 0.02);
+      try { ctx.drawImage(video, c.sx, c.sy, c.sw, c.sh, dx, dy, dw, dh); } catch(e){}
+      ctx.restore();
+    }
+  } else {
+    const r = cropRect();
+    if (ready){
+      try { ctx.drawImage(video, r.sx, r.sy, r.sw, r.sh, 0, 0, W, H); } catch(e){}
+    }
   }
   ctx.restore();
   if (drawSubs !== false) drawSubtitles(ctx, W, H, tClip);
@@ -1160,6 +1238,104 @@ function findPauses(env, hz, floor, speech){
     run = 0;
   }
   return out;
+}
+
+/* ================== поиск вшитых в исходник чёрных полей =================
+   Смотрим несколько кадров в разных местах и берём пересечение: поле —
+   это то, что чёрное на всех кадрах сразу. Иначе тёмная сцена сошла бы за
+   чёрную полосу, и у клипа отрезало бы нужную картинку.                  */
+async function detectBlackBars(){
+  S.bars = null;
+  $('#barsNote').textContent = '';
+  if (!S.hasVideoTrack || !S.url) return;
+
+  const probe = document.createElement('video');
+  probe.muted = true;
+  probe.playsInline = true;
+  probe.preload = 'auto';
+  probe.crossOrigin = 'anonymous';
+  probe.src = S.url;
+  const cvs = document.createElement('canvas');
+  const w = 160, h = Math.max(2, Math.round(160 * S.vh / S.vw));
+  cvs.width = w; cvs.height = h;
+  const cx = cvs.getContext('2d', { willReadFrequently: true });
+
+  const once = (el, ev, ms) => new Promise(res => {
+    let done = false;
+    const f = () => { if (done) return; done = true; el.removeEventListener(ev, f); res(); };
+    el.addEventListener(ev, f);
+    setTimeout(f, ms);
+  });
+
+  try {
+    await once(probe, 'loadeddata', 8000);
+    if (!probe.videoWidth) return;
+
+    const LIM = 22;                            // ярче этого — уже не чёрное
+    let top = h, bottom = h, left = w, right = w;
+    let shots = 0;
+    for (const frac of [0.2, 0.45, 0.7]){
+      probe.currentTime = clamp(S.duration * frac, 0, Math.max(0, S.duration - 0.1));
+      await once(probe, 'seeked', 5000);
+      try { cx.drawImage(probe, 0, 0, w, h); } catch(e){ break; }
+      let px;
+      try { px = cx.getImageData(0, 0, w, h).data; } catch(e){ break; }  // чужой домен
+      shots++;
+
+      const rowLit = y => {
+        let lit = 0;
+        for (let x = 0; x < w; x++){
+          const i = (y * w + x) * 4;
+          if (Math.max(px[i], px[i + 1], px[i + 2]) > LIM) lit++;
+        }
+        return lit / w;
+      };
+      const colLit = x => {
+        let lit = 0;
+        for (let y = 0; y < h; y++){
+          const i = (y * w + x) * 4;
+          if (Math.max(px[i], px[i + 1], px[i + 2]) > LIM) lit++;
+        }
+        return lit / h;
+      };
+      let t = 0; while (t < h && rowLit(t) < 0.02) t++;
+      let b = 0; while (b < h - t && rowLit(h - 1 - b) < 0.02) b++;
+      let l = 0; while (l < w && colLit(l) < 0.02) l++;
+      let r = 0; while (r < w - l && colLit(w - 1 - r) < 0.02) r++;
+      top = Math.min(top, t); bottom = Math.min(bottom, b);
+      left = Math.min(left, l); right = Math.min(right, r);
+    }
+    if (!shots) return;
+
+    // переводим в пиксели исходника и отбрасываем мелочь
+    const ky = S.vh / h, kx = S.vw / w;
+    const bars = {
+      top: Math.round(top * ky), bottom: Math.round(bottom * ky),
+      left: Math.round(left * kx), right: Math.round(right * kx)
+    };
+    const min = Math.max(4, Math.round(S.vh * 0.015));
+    if (bars.top < min) bars.top = 0;
+    if (bars.bottom < min) bars.bottom = 0;
+    if (bars.left < Math.max(4, S.vw * 0.015)) bars.left = 0;
+    if (bars.right < Math.max(4, S.vw * 0.015)) bars.right = 0;
+    // страховка: не съедаем больше 40% кадра
+    if (bars.top + bars.bottom > S.vh * 0.4 || bars.left + bars.right > S.vw * 0.4) return;
+
+    if (bars.top || bars.bottom || bars.left || bars.right){
+      S.bars = bars;
+      const parts = [];
+      if (bars.top || bars.bottom) parts.push('сверху и снизу по ' +
+        Math.max(bars.top, bars.bottom) + ' px');
+      if (bars.left || bars.right) parts.push('по бокам по ' +
+        Math.max(bars.left, bars.right) + ' px');
+      $('#barsNote').textContent = '— найдены: ' + parts.join(', ');
+      resizePreview(); drawPreview();
+    }
+  } catch(e){
+    /* не смогли — просто работаем без обрезки */
+  } finally {
+    try { probe.removeAttribute('src'); probe.load(); } catch(e){}
+  }
 }
 
 async function analyzeWholeVideo(){
@@ -1499,14 +1675,36 @@ $('#btnSplitGo').addEventListener('click', () => {
 $$('#segCrop button').forEach(b => b.addEventListener('click', () => {
   $$('#segCrop button').forEach(x => x.classList.toggle('on', x === b));
   S.crop = b.dataset.v;
-  $('#panBox').style.display = S.crop === 'vertical' ? '' : 'none';
+  applyCropUi();
   resizePreview(); drawPreview();
 }));
+function applyCropUi(){
+  const blur = S.crop === 'blur';
+  $('#panBox').style.display = (S.crop === 'vertical' || blur) ? '' : 'none';
+  $('#blurBox').style.display = blur ? '' : 'none';
+  $('#panLabel').textContent = blur ? 'Положение кадра по вертикали' : 'Сдвиг кадра по горизонтали';
+  $('#cropHint').innerHTML = blur
+    ? 'Кадр виден целиком, ничего не отрезается, а пустое место сверху и снизу ' +
+      'занимает размытая копия того же кадра — вместо чёрных полос. ' +
+      'Так обычно оформляют горизонтальное видео для Shorts и Reels.'
+    : (S.crop === 'vertical'
+        ? 'Из широкого кадра вырезается вертикальная полоса — ползунком выберите, какую именно часть оставить. Края при этом теряются.'
+        : 'Клип сохранит формат исходника. Для вертикальных лент площадка сама добавит чёрные поля — тогда лучше взять режим с размытым фоном.');
+  updatePanLabel();
+}
 $('#pan').addEventListener('input', e => { S.pan = parseFloat(e.target.value); updatePanLabel(); drawPreview(); });
+$('#blurAmt').addEventListener('input', e => {
+  S.blur = parseFloat(e.target.value);
+  $('#blurVal').textContent = S.blur;
+  drawPreview();
+});
 function updatePanLabel(){
   const v = S.pan;
-  $('#panVal').textContent = v < 0.2 ? 'левый край' : v < 0.42 ? 'левее центра'
-    : v <= 0.58 ? 'центр' : v <= 0.8 ? 'правее центра' : 'правый край';
+  $('#panVal').textContent = S.crop === 'blur'
+    ? (v < 0.2 ? 'вверху' : v < 0.42 ? 'выше центра' : v <= 0.58 ? 'по центру'
+       : v <= 0.8 ? 'ниже центра' : 'внизу')
+    : (v < 0.2 ? 'левый край' : v < 0.42 ? 'левее центра'
+       : v <= 0.58 ? 'центр' : v <= 0.8 ? 'правее центра' : 'правый край');
 }
 
 /* -------------------------------- стили ---------------------------------- */
@@ -2984,7 +3182,8 @@ window.__SVM = {
   lastExport: null,
   lastZip: null,
   setTrim, groupWords, chunksToWords, captureSegmentAudio, resampleTo16k,
-  outSize, cropRect, renderCues, asrDiag, isGpuError, transcribe,
+  outSize, cropRect, contentRect, coverRect, detectBlackBars, applyCropUi,
+  renderCues, asrDiag, isGpuError, transcribe,
   selectClip, splitPlan, zipStore, crc32, syncClipUi,
   undo, redo, pushUndo, findPauses, analyzeWholeVideo, drawWave,
   loadFromUrl, looksLikeUrl,
@@ -3011,6 +3210,8 @@ renderCues();
 renderClips();
 refreshUndoUi();
 $('#chkPause').addEventListener('change', updateSplitHint);
+$('#chkBars').addEventListener('change', () => { resizePreview(); drawPreview(); });
+applyCropUi();
 addEventListener('resize', () => { resizePreview(); drawWave(); drawPreview(); });
 drawFrame(pctx, preview.width, preview.height, 0);
 
