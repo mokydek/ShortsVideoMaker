@@ -518,6 +518,14 @@ function fmtTime(t){
   const m = Math.floor(t / 60), s = t - m * 60;
   return m + ':' + (s < 10 ? '0' : '') + s.toFixed(1);
 }
+function human_eta(sec){
+  sec = Math.max(0, Math.round(sec));
+  if (sec < 60) return sec + ' с';
+  const m = Math.round(sec / 60);
+  if (m < 60) return m + ' мин';
+  const h = Math.floor(m / 60);
+  return h + ' ч ' + (m % 60) + ' мин';
+}
 function fmtSize(b){
   if (b < 1024) return b + ' Б';
   if (b < 1048576) return (b / 1024).toFixed(1) + ' КБ';
@@ -2099,6 +2107,7 @@ const CDN = [
   'https://cdn.jsdelivr.net/npm/@huggingface/transformers/dist/transformers.min.js'
 ];
 let TJS = null, pipeCache = { key: null, pipe: null };
+let wasmProxy = true;                          // считать в отдельном потоке
 
 async function loadTransformers(){
   if (TJS) return TJS;
@@ -2115,6 +2124,10 @@ async function loadTransformers(){
     // onnxruntime ругается в консоль и всё равно откатывается к одному
     TJS.env.backends.onnx.wasm.numThreads =
       self.crossOriginIsolated ? Math.min(4, navigator.hardwareConcurrency || 2) : 1;
+    /* Самое важное: считать модель в отдельном потоке. Без этого распознавание
+       идёт прямо в главном потоке страницы, и браузер на всё это время
+       перестаёт отвечать — вплоть до окна «Страница не отвечает». */
+    TJS.env.backends.onnx.wasm.proxy = wasmProxy;
   }
   return TJS;
 }
@@ -2138,8 +2151,23 @@ async function getPipe(model, useGpu, onProgress){
       setAsrStatus('WebGPU не запустился, переключаюсь на обычный режим…');
       return getPipe(model, false, onProgress);
     }
+    if (wasmProxy){
+      // отдельный поток не поднялся — считаем в главном, но предупреждаем
+      wasmProxy = false;
+      asrDiag.proxy = String(e && e.message || e);
+      if (T.env.backends && T.env.backends.onnx && T.env.backends.onnx.wasm){
+        T.env.backends.onnx.wasm.proxy = false;
+      }
+      banner('proxy','warn',
+        '<b>Не удалось увести распознавание в отдельный поток.</b> Оно пойдёт в главном, ' +
+        'и на это время страница будет подтормаживать или вовсе не отвечать — это нормально, ' +
+        'дождитесь конца. Помогает укоротить клип.');
+      setAsrStatus('Считаю в главном потоке — страница может подвиснуть…');
+      return getPipe(model, false, onProgress);
+    }
     throw e;
   }
+  pipe.__svmProxy = wasmProxy;
   pipe.__svmGpu = !!useGpu;                             // на чём реально считаем
   if (pipeCache.pipe && pipeCache.pipe.dispose){ try { pipeCache.pipe.dispose(); } catch(e){} }
   pipeCache = { key, pipe };
@@ -2174,10 +2202,21 @@ async function transcribe(pipe, audio, base, useGpu){
     return { out, wordLevel: true };
   } catch(e){
     if (useGpu && isGpuError(e)) throw e;
+    if (String(e && e.message) === 'Отменено') throw e;
     asrDiag.word = String(e && e.message || e);
     setAsrStatus('Пословные метки недоступны — беру посегментные…');
     return { out: await pipe(audio, Object.assign({}, base, { return_timestamps: true })), wordLevel: false };
   }
+}
+
+/* Сколько примерно займёт распознавание. Числа грубые и зависят от машины,
+   но пользователю важно понимать порядок: секунды это или полчаса. */
+const ASR_SPEED = { 'whisper-tiny': 0.35, 'whisper-base': 0.8, 'whisper-small': 2.5 };
+function asrEstimate(seconds, model, useGpu){
+  const key = Object.keys(ASR_SPEED).find(k => model.indexOf(k) >= 0) || 'whisper-base';
+  let factor = ASR_SPEED[key];
+  if (useGpu) factor /= 5;
+  return seconds * factor;
 }
 
 /* Прогресс скачивания. Хранилище моделей не всегда отдаёт content-length —
@@ -2284,9 +2323,38 @@ async function asrActiveClip(prefix){
 
     // 3. распознавание
     setAsrProg(0.68);
-    setAsrStatus(prefix + 'Распознаю речь… (это самая долгая часть)');
     const lang = $('#selLang').value;
-    const base = { chunk_length_s: 30, stride_length_s: 5, task: 'transcribe' };
+    const secs = audio.length / SR;
+    const eta = asrEstimate(secs, model, useGpu);
+    const chunkStep = 30 - 2 * 5;                       // с учётом перекрытия
+    const totalChunks = Math.max(1, Math.ceil(secs / chunkStep));
+    let doneChunks = 0;
+    const tAsr = performance.now();
+
+    setAsrStatus(prefix + 'Распознаю речь… ориентировочно ' + human_eta(eta));
+    if (eta > 90 && !prefix){
+      banner('slow','info',
+        '<b>Это займёт время:</b> клип на ' + human_eta(secs) + ' ' +
+        (pipe.__svmProxy ? 'считается в отдельном потоке, страница остаётся живой. '
+                         : 'считается в главном потоке, страница будет подтормаживать. ') +
+        'Ориентировочно ' + human_eta(eta) + '. Быстрее будет так: клип покороче, ' +
+        'модель tiny вместо ' + (model.indexOf('small') >= 0 ? 'small' : 'base') +
+        (navigator.gpu && !useGpu ? ', либо галочка «Ускорение WebGPU»' : '') + '.');
+    }
+
+    const base = {
+      chunk_length_s: 30, stride_length_s: 5, task: 'transcribe',
+      chunk_callback: () => {
+        doneChunks++;
+        const frac = clamp(doneChunks / totalChunks, 0, 1);
+        setAsrProg(0.68 + frac * 0.3);
+        const spent = (performance.now() - tAsr) / 1000;
+        const left = frac > 0.05 ? spent / frac - spent : eta;
+        setAsrStatus(prefix + 'Распознаю речь: ' + doneChunks + ' из ' + totalChunks +
+          ' · осталось примерно ' + human_eta(left));
+        if (asrAbort) throw new Error('Отменено');
+      }
+    };
     if (lang !== 'auto') base.language = lang;
 
     let res;
@@ -2425,10 +2493,19 @@ function analyzeAudio(audio){
 
   /* Выпадения звука ищем по целым пустым кадрам, а не по отдельным сэмплам:
      около нуля сэмплы проходят у любого сигнала — на каждом переходе через
-     ноль, — и по ним провал не отличить от нормального звука. А вот целые
-     20 мс цифровой тишины посреди громкого места бывают только при обрыве. */
+     ноль. Но и просто пустых кадров мало: в паузах между фразами тишина
+     бывает настоящей. Провал — это дырка ПОСРЕДИ звука, поэтому считаем
+     только те пустые кадры, рядом с которыми с обеих сторон есть громкие. */
+  const NEAR = 10;                                   // 200 мс в каждую сторону
+  const loudNear = (from, to) => {
+    for (let i = Math.max(0, from); i < Math.min(n, to); i++) if (env[i] > 1e-4) return true;
+    return false;
+  };
   let dead = 0;
-  for (let i = 0; i < n; i++) if (env[i] < 1e-5) dead++;
+  for (let i = 0; i < n; i++){
+    if (env[i] >= 1e-5) continue;
+    if (loudNear(i - NEAR, i) && loudNear(i + 1, i + 1 + NEAR)) dead++;
+  }
   return { env, frame, floor, speech, dur: audio.length / SR,
            silentPct: n ? dead / n * 100 : 100,
            rms: pick(0.5) };
