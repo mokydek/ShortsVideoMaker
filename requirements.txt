@@ -1,0 +1,21 @@
+# Зависимости ShortsVideoMaker.
+# Установка:  pip install -r requirements.txt
+#
+# Отдельно нужен ffmpeg — он ставится не через pip, см. README.
+
+# --- автонарезка (autocut.py) ---
+faster-whisper>=1.0.3       # распознавание речи с таймингами по словам
+PyYAML>=6.0                 # чтение config.yaml
+
+# --- публикация на YouTube (upload_youtube.py) ---
+google-api-python-client>=2.100.0
+google-auth-oauthlib>=1.2.0
+google-auth-httplib2>=0.2.0
+
+# --- публикация в TikTok (upload_tiktok.py) ---
+requests>=2.31.0
+
+# --- по желанию, только для видеокарт NVIDIA ---
+# Ускоряет распознавание в разы. Если этих библиотек нет, autocut.py сам
+# перейдёт на процессор и скажет об этом.
+#   pip install nvidia-cublas-cu12 nvidia-cudnn-cu12
