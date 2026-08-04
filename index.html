@@ -94,6 +94,10 @@ label.f{display:block;font-size:12px;color:var(--muted);margin:0 0 5px}
 .drop:hover,.drop.over{border-color:var(--acc);background:rgba(167,139,250,.08)}
 .drop b{display:block;font-size:16px;margin-bottom:4px}
 .drop small{color:var(--muted)}
+.urlrow{display:flex;gap:8px;margin-top:11px}
+.urlrow input{flex:1 1 auto;font-size:13.5px}
+.urlrow button{flex:0 0 auto}
+@media(max-width:560px){.urlrow{flex-wrap:wrap}.urlrow input{flex:1 1 100%}}
 .fileinfo{margin-top:11px;font-size:13px;color:var(--muted);display:none}
 .fileinfo.on{display:block}
 .fileinfo b{color:var(--txt)}
@@ -235,10 +239,18 @@ footer a{color:var(--acc)}
 <section class="card">
   <h2><i>1</i>Видео</h2>
   <div class="drop" id="drop" tabindex="0" role="button" aria-label="Выбрать видеофайл">
-    <b>Перетащите видео сюда или нажмите, чтобы выбрать</b>
+    <b>Перетащите видео или ссылку сюда — либо нажмите, чтобы выбрать файл</b>
     <small>MP4, WebM, MOV — файл остаётся на вашем компьютере</small>
   </div>
   <input type="file" id="file" accept="video/*,.mp4,.webm,.mov,.m4v,.mkv" class="sr">
+  <div class="urlrow">
+    <input type="url" id="inUrl" placeholder="…или вставьте прямую ссылку на видеофайл: https://…/video.mp4"
+           spellcheck="false" autocomplete="off" aria-label="Ссылка на видеофайл">
+    <button id="btnUrl">Загрузить</button>
+    <button id="btnUrlStop" class="ghost" style="display:none;flex:0 0 auto">Отмена</button>
+  </div>
+  <div class="prog" id="dlProg"><i></i></div>
+  <div class="status" id="dlStatus"></div>
   <div class="fileinfo" id="fileinfo"></div>
 </section>
 
@@ -586,12 +598,198 @@ fileEl.addEventListener('change', () => { if (fileEl.files && fileEl.files[0]) l
   e.preventDefault(); e.stopPropagation(); dropEl.classList.remove('over');
 }));
 dropEl.addEventListener('drop', e => {
-  const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
-  if (f) loadFile(f);
+  const dt = e.dataTransfer;
+  if (!dt) return;
+  const f = dt.files && dt.files[0];
+  if (f){ loadFile(f); return; }
+  // если перетащили не файл, а ссылку из другой вкладки
+  const link = (dt.getData('text/uri-list') || dt.getData('text/plain') || '')
+    .split(/[\r\n]+/).map(s => s.trim()).filter(Boolean)[0];
+  if (looksLikeUrl(link)){
+    $('#inUrl').value = link;
+    loadFromUrl(link);
+  }
 });
 // не даём браузеру открыть файл, если промахнулись мимо зоны
 window.addEventListener('dragover', e => e.preventDefault());
 window.addEventListener('drop', e => e.preventDefault());
+
+/* ========================= загрузка по ссылке ============================
+   Работает только с прямой ссылкой на файл, и только если сервер разрешает
+   его читать из браузера (заголовок CORS). Скачанный файл дальше ничем не
+   отличается от выбранного с диска: он остаётся в памяти вкладки и никуда
+   не отправляется.                                                       */
+const PLATFORMS = [
+  [/youtube\.com|youtu\.be/i, 'YouTube'],
+  [/tiktok\.com/i, 'TikTok'],
+  [/instagram\.com/i, 'Instagram'],
+  [/vk\.com|vkvideo\.ru/i, 'ВКонтакте'],
+  [/rutube\.ru/i, 'Rutube'],
+  [/dzen\.ru/i, 'Дзен'],
+  [/ok\.ru/i, 'Одноклассники'],
+  [/vimeo\.com/i, 'Vimeo'],
+  [/twitch\.tv/i, 'Twitch'],
+  [/facebook\.com|fb\.watch/i, 'Facebook'],
+];
+const VIDEO_EXT = /\.(mp4|webm|mov|m4v|mkv|avi|ogv|ogg)(\?|#|$)/i;
+
+let dlAbort = null;
+
+function setDlStatus(t){ $('#dlStatus').textContent = t || ''; }
+function setDlProg(p){
+  const box = $('#dlProg');
+  if (p === null){ box.className = 'prog'; return; }
+  box.className = 'prog on';
+  box.firstElementChild.style.width = clamp(p * 100, 0, 100) + '%';
+}
+
+function looksLikeUrl(s){
+  return /^https?:\/\/\S+$/i.test(String(s || '').trim());
+}
+
+async function loadFromUrl(raw){
+  const text = String(raw || '').trim();
+  dropBanner('url');
+  if (!text) return;
+  if (S.busy){ banner('busy','warn','Дождитесь окончания текущей операции.'); return; }
+
+  let url;
+  try { url = new URL(text); } catch(e){
+    banner('url','warn','<b>Это не похоже на ссылку.</b> Нужен полный адрес, начинающийся с http:// или https://');
+    return;
+  }
+  if (!/^https?:$/.test(url.protocol)){
+    banner('url','warn','<b>Такие ссылки не поддерживаются.</b> Нужен обычный адрес http:// или https://');
+    return;
+  }
+
+  const platform = (PLATFORMS.find(p => p[0].test(url.hostname)) || [])[1];
+  if (platform){
+    banner('url','err',
+      '<b>Это ссылка на страницу ' + esc(platform) + ', а не на видеофайл.</b> ' +
+      'Забрать оттуда видео браузер не может: площадки отдают его своему плееру ' +
+      'по частям и не разрешают читать файл со стороны. Обходить это приложение ' +
+      'не будет — так устроены правила самих сервисов.<br>' +
+      'Что делать: сохраните ролик на компьютер тем способом, которым обычно ' +
+      'пользуетесь, и перетащите файл сюда — дальше всё работает как обычно.');
+    setDlStatus('Ссылка на ' + platform + ' — нужен файл, а не страница.');
+    return;
+  }
+
+  if (url.protocol === 'http:' && location.protocol === 'https:'){
+    banner('url','err',
+      '<b>Браузер заблокирует эту ссылку.</b> Сайт открыт по https, а ссылка — по http. ' +
+      'Попробуйте адрес с https:// или скачайте файл и перетащите его сюда.');
+    return;
+  }
+  if (!VIDEO_EXT.test(url.pathname)){
+    banner('url','info',
+      '<b>В ссылке не видно расширения видеофайла</b> — попробую всё равно, но если ' +
+      'это страница с плеером, а не файл, ничего не выйдет. Нужна прямая ссылка, ' +
+      'которая заканчивается на .mp4, .webm или .mov');
+  }
+
+  const btn = $('#btnUrl'), stopBtn = $('#btnUrlStop');
+  btn.disabled = true;
+  stopBtn.style.display = '';
+  dlAbort = new AbortController();
+  setDlProg(0);
+  setDlStatus('Скачиваю…');
+
+  try {
+    const res = await fetch(url.href, {
+      signal: dlAbort.signal,
+      mode: 'cors',
+      credentials: 'omit',
+      redirect: 'follow'
+    });
+    if (!res.ok) throw Object.assign(new Error('сервер ответил ' + res.status), { http: res.status });
+
+    const type = (res.headers.get('content-type') || '').split(';')[0].trim();
+    if (type && !/^(video|application\/octet-stream|binary)/i.test(type)){
+      throw Object.assign(new Error('по ссылке лежит не видео, а «' + type + '»'), { kind: true });
+    }
+
+    const total = parseInt(res.headers.get('content-length') || '0', 10);
+    let blob;
+    if (res.body && res.body.getReader){
+      const reader = res.body.getReader();
+      const chunks = [];
+      let got = 0;
+      for (;;){
+        const { done, value } = await reader.read();
+        if (done) break;
+        chunks.push(value);
+        got += value.length;
+        if (total){
+          setDlProg(got / total);
+          setDlStatus('Скачиваю: ' + fmtSize(got) + ' из ' + fmtSize(total));
+        } else {
+          setDlProg(1 - Math.exp(-got / 5e7));
+          setDlStatus('Скачиваю: ' + fmtSize(got));
+        }
+      }
+      blob = new Blob(chunks, { type: type || 'video/mp4' });
+    } else {
+      blob = await res.blob();
+    }
+    if (!blob.size) throw new Error('файл пустой');
+
+    let name = decodeURIComponent(url.pathname.split('/').pop() || '') || 'video';
+    if (!VIDEO_EXT.test(name)) name += '.mp4';
+    setDlProg(1);
+    setDlStatus('Скачано ' + fmtSize(blob.size) + ' — открываю…');
+    setTimeout(() => { setDlProg(null); setDlStatus(''); }, 1500);
+    loadFile(new File([blob], name, { type: blob.type || 'video/mp4' }));
+    $('#inUrl').value = '';
+
+  } catch(err){
+    setDlProg(null);
+    const msg = String(err && err.message || err);
+    if (err && err.name === 'AbortError'){
+      setDlStatus('Загрузка отменена.');
+    } else if (err && err.kind){
+      banner('url','err','<b>По этой ссылке не видеофайл.</b> ' + esc(msg) +
+        '. Нужна прямая ссылка на сам файл, а не на страницу с плеером.');
+      setDlStatus('Не видео.');
+    } else if (err && err.http){
+      banner('url','err','<b>Сервер не отдал файл</b> (' + err.http + '). ' +
+        'Проверьте, что ссылка открывается и не требует входа в аккаунт.');
+      setDlStatus('Ошибка ' + err.http);
+    } else {
+      banner('url','err',
+        '<b>Не удалось скачать по ссылке.</b> Чаще всего причина одна: сервер не ' +
+        'разрешает браузеру читать файл со стороннего сайта (нет заголовка CORS). ' +
+        'Это ограничение того сервера, а не приложения — обойти его из браузера нельзя.<br>' +
+        'Самый простой выход: скачайте файл и перетащите его сюда. ' +
+        '<span class="hint">Техническая причина: ' + esc(msg) + '</span>');
+      setDlStatus('Сервер не разрешил чтение файла.');
+    }
+  } finally {
+    btn.disabled = false;
+    stopBtn.style.display = 'none';
+    dlAbort = null;
+  }
+}
+
+$('#btnUrl').addEventListener('click', () => loadFromUrl($('#inUrl').value));
+$('#btnUrlStop').addEventListener('click', () => { if (dlAbort) dlAbort.abort(); });
+$('#inUrl').addEventListener('keydown', e => {
+  if (e.key === 'Enter'){ e.preventDefault(); loadFromUrl($('#inUrl').value); }
+});
+
+// ссылку можно просто вставить в страницу
+document.addEventListener('paste', e => {
+  const a = document.activeElement;
+  if (a && (a.tagName === 'INPUT' || a.tagName === 'TEXTAREA' || a.isContentEditable)) return;
+  const text = (e.clipboardData || window.clipboardData || {}).getData
+    ? (e.clipboardData || window.clipboardData).getData('text') : '';
+  if (looksLikeUrl(text)){
+    e.preventDefault();
+    $('#inUrl').value = text.trim();
+    loadFromUrl(text);
+  }
+});
 
 function loadFile(f){
   if (!f) return;
@@ -2789,6 +2987,7 @@ window.__SVM = {
   outSize, cropRect, renderCues, asrDiag, isGpuError, transcribe,
   selectClip, splitPlan, zipStore, crc32, syncClipUi,
   undo, redo, pushUndo, findPauses, analyzeWholeVideo, drawWave,
+  loadFromUrl, looksLikeUrl,
   wave(){ return waveData ? { pauses: waveData.pauses.length, hz: waveData.hz,
                               floor: +waveData.floor.toFixed(5),
                               speech: +waveData.speech.toFixed(5),
