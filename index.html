@@ -943,6 +943,80 @@ function resumeAudio(){
    а ждать приходится в speed раз меньше.                                   */
 let asrAbort = false;
 
+/* Съём сэмплов. Основной путь — AudioWorklet (ScriptProcessor объявлен
+   устаревшим и сорит предупреждениями в консоли). Но AudioWorklet живёт только
+   в защищённом контексте, а страницу можно открыть и просто из файла — поэтому
+   ScriptProcessor остаётся запасным вариантом.                              */
+const CAPTURE_WORKLET = `
+class SvmCapture extends AudioWorkletProcessor {
+  constructor(){
+    super();
+    this.on = false; this.buf = new Float32Array(4096); this.n = 0;
+    this.port.onmessage = e => {
+      const d = e.data || {};
+      if ('capture' in d) this.on = !!d.capture;
+      if (d.flush) this.flush();
+    };
+  }
+  flush(){
+    if (!this.n) return;
+    const out = this.buf.slice(0, this.n);
+    this.n = 0;
+    this.port.postMessage(out, [out.buffer]);
+  }
+  process(inputs){
+    if (!this.on) return true;
+    const inp = inputs[0];
+    if (!inp || !inp.length) return true;
+    const L = inp[0], R = inp.length > 1 ? inp[1] : inp[0];
+    for (let i = 0; i < L.length; i++){
+      this.buf[this.n++] = (L[i] + R[i]) * 0.5;
+      if (this.n === this.buf.length) this.flush();
+    }
+    return true;
+  }
+}
+registerProcessor('svm-capture', SvmCapture);
+`;
+
+async function makeCapture(actx, onChunk){
+  if (actx.audioWorklet && window.AudioWorkletNode){
+    try {
+      if (!actx.__svmWorklet){
+        const url = URL.createObjectURL(new Blob([CAPTURE_WORKLET], { type: 'text/javascript' }));
+        await actx.audioWorklet.addModule(url);
+        URL.revokeObjectURL(url);
+        actx.__svmWorklet = true;
+      }
+      const node = new AudioWorkletNode(actx, 'svm-capture', { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [1] });
+      node.port.onmessage = e => onChunk(e.data);
+      return {
+        node, kind: 'worklet',
+        start(){ node.port.postMessage({ capture: true }); },
+        stop(){ node.port.postMessage({ capture: false, flush: true }); },
+        destroy(){ node.port.onmessage = null; try { node.disconnect(); } catch(e){} }
+      };
+    } catch(e){ asrDiag.worklet = String(e && e.message || e); }
+  }
+  const node = actx.createScriptProcessor(4096, 2, 2);
+  let on = false;
+  node.onaudioprocess = e => {
+    if (!on) return;
+    const ib = e.inputBuffer;
+    const L = ib.getChannelData(0);
+    const R = ib.numberOfChannels > 1 ? ib.getChannelData(1) : L;
+    const m = new Float32Array(L.length);
+    for (let i = 0; i < L.length; i++) m[i] = (L[i] + R[i]) * 0.5;
+    onChunk(m);
+  };
+  return {
+    node, kind: 'scriptprocessor',
+    start(){ on = true; },
+    stop(){ on = false; },
+    destroy(){ on = false; node.onaudioprocess = null; try { node.disconnect(); } catch(e){} }
+  };
+}
+
 async function captureSegmentAudio(onProgress){
   const g = audioGraph();
   await g.actx.resume().catch(() => {});
@@ -950,34 +1024,25 @@ async function captureSegmentAudio(onProgress){
   let speed = parseFloat($('#selSpeed').value) || 1;
   if (!('preservesPitch' in video) && !('webkitPreservesPitch' in video)) speed = 1;
 
-  const proc = g.actx.createScriptProcessor(4096, 2, 2);
+  const chunks = [];
+  let total = 0;
+  const cap = await makeCapture(g.actx, m => { chunks.push(m); total += m.length; });
+  asrDiag.capture = cap.kind;
+
   const sink = g.actx.createGain();
   sink.gain.value = 0;
-  g.source.connect(proc);
-  proc.connect(sink);
+  g.source.connect(cap.node);
+  cap.node.connect(sink);
   sink.connect(g.actx.destination);
-
-  const chunks = [];
-  let total = 0, capturing = false;
-  proc.onaudioprocess = e => {
-    if (!capturing) return;
-    const ib = e.inputBuffer;
-    const L = ib.getChannelData(0);
-    const R = ib.numberOfChannels > 1 ? ib.getChannelData(1) : L;
-    const m = new Float32Array(L.length);
-    for (let i = 0; i < L.length; i++) m[i] = (L[i] + R[i]) * 0.5;
-    chunks.push(m); total += m.length;
-  };
 
   const prevRate = video.playbackRate;
   const prevMon  = g.monitor.gain.value;
   const wasPitch = 'preservesPitch' in video ? video.preservesPitch : null;
 
   const cleanup = () => {
-    capturing = false;
-    proc.onaudioprocess = null;
-    try { g.source.disconnect(proc); } catch(e){}
-    try { proc.disconnect(); } catch(e){}
+    cap.stop();
+    cap.destroy();
+    try { g.source.disconnect(cap.node); } catch(e){}
     try { sink.disconnect(); } catch(e){}
     video.pause();
     video.playbackRate = prevRate;
@@ -1003,7 +1068,7 @@ async function captureSegmentAudio(onProgress){
     const ok = await safePlay();
     if (!ok) throw new Error('Браузер не дал запустить воспроизведение — нажмите «▶ Играть» и повторите.');
 
-    capturing = true;
+    cap.start();
     const t0 = performance.now();
     const budget = (S.end - S.start) / speed * 1000 + 15000;
     while (video.currentTime < S.end && !video.ended && !asrAbort){
@@ -1013,6 +1078,8 @@ async function captureSegmentAudio(onProgress){
     }
     video.pause();                            // дальше в графе только тишина
     await sleep(200);                         // добираем хвост буферов
+    cap.stop();                               // и остаток из буфера воркле́та
+    await sleep(60);
   } finally {
     cleanup();
   }
@@ -1072,7 +1139,11 @@ async function loadTransformers(){
   if (!TJS) throw Object.assign(new Error('CDN недоступен'), { cdn: true, cause: lastErr });
   TJS.env.allowLocalModels = false;
   if (TJS.env.backends && TJS.env.backends.onnx && TJS.env.backends.onnx.wasm){
-    TJS.env.backends.onnx.wasm.numThreads = Math.min(4, navigator.hardwareConcurrency || 2);
+    // многопоточный wasm требует заголовков COOP/COEP, а их на статическом
+    // хостинге вроде GitHub Pages не выставить: просим один поток, иначе
+    // onnxruntime ругается в консоль и всё равно откатывается к одному
+    TJS.env.backends.onnx.wasm.numThreads =
+      self.crossOriginIsolated ? Math.min(4, navigator.hardwareConcurrency || 2) : 1;
   }
   return TJS;
 }
@@ -1082,7 +1153,7 @@ async function getPipe(model, useGpu, onProgress){
   if (pipeCache.key === key && pipeCache.pipe) return pipeCache.pipe;
   const T = await loadTransformers();
   const opts = {
-    dtype: useGpu ? { encoder_model: 'fp32', decoder_model_merged: 'fp32' }
+    dtype: useGpu ? { encoder_model: 'fp32', decoder_model_merged: 'q4' }
                   : { encoder_model: 'fp32', decoder_model_merged: 'q8' },
     progress_callback: onProgress
   };
@@ -1092,11 +1163,13 @@ async function getPipe(model, useGpu, onProgress){
     pipe = await T.pipeline('automatic-speech-recognition', model, opts);
   } catch(e){
     if (useGpu){                                        // WebGPU не завёлся — на CPU
+      asrDiag.gpuLoad = String(e && e.message || e);
       setAsrStatus('WebGPU не запустился, переключаюсь на обычный режим…');
       return getPipe(model, false, onProgress);
     }
     throw e;
   }
+  pipe.__svmGpu = !!useGpu;                             // на чём реально считаем
   if (pipeCache.pipe && pipeCache.pipe.dispose){ try { pipeCache.pipe.dispose(); } catch(e){} }
   pipeCache = { key, pipe };
   return pipe;
@@ -1115,6 +1188,50 @@ async function getAsrPipe(model, useGpu, onProgress){
     setAsrStatus('Сборка с пословными метками недоступна, беру обычную…');
     return await getPipe(model, useGpu, onProgress);
   }
+}
+
+/* Один прогон распознавания: сначала пословные метки, при неудаче —
+   посегментные. Ошибку самого WebGPU наверх пропускаем сразу, повторять её
+   вторым запросом бессмысленно. */
+function isGpuError(e){
+  return /webgpu|jsep|gpu data|gpu buffer|requestadapter|shader/i.test(String(e && e.message || e));
+}
+async function transcribe(pipe, audio, base, useGpu){
+  try {
+    const out = await pipe(audio, Object.assign({}, base, { return_timestamps: 'word' }));
+    if (!out || !out.chunks || !out.chunks.length) throw new Error('нет пословных меток');
+    return { out, wordLevel: true };
+  } catch(e){
+    if (useGpu && isGpuError(e)) throw e;
+    asrDiag.word = String(e && e.message || e);
+    setAsrStatus('Пословные метки недоступны — беру посегментные…');
+    return { out: await pipe(audio, Object.assign({}, base, { return_timestamps: true })), wordLevel: false };
+  }
+}
+
+/* Прогресс скачивания. Хранилище моделей не всегда отдаёт content-length —
+   тогда процентов нет и приходится показывать просто набранные мегабайты. */
+function modelProgress(){
+  const files = {};
+  return info => {
+    if (!info) return;
+    if (info.status === 'progress' && info.file){
+      files[info.file] = info;
+      const vals = Object.values(files);
+      const sized = vals.filter(v => v.total > 0);
+      if (sized.length === vals.length){
+        const avg = vals.reduce((a, v) => a + (v.progress || 0), 0) / vals.length;
+        setAsrProg(0.3 + (avg / 100) * 0.35);
+        setAsrStatus('Скачиваю модель: ' + Math.round(avg) + '% (один раз, дальше из кеша)');
+      } else {
+        const mb = vals.reduce((a, v) => a + (v.loaded || 0), 0) / 1048576;
+        setAsrProg(0.3 + 0.35 * (1 - Math.exp(-mb / 60)));
+        setAsrStatus('Скачиваю модель: ' + mb.toFixed(1) + ' МБ (один раз, дальше из кеша)');
+      }
+    } else if (info.status === 'ready'){
+      setAsrStatus('Модель готова, распознаю…');
+    }
+  };
 }
 
 function setAsrStatus(t){ $('#asrStatus').textContent = t; }
@@ -1153,19 +1270,9 @@ $('#btnAsr').addEventListener('click', async () => {
     // 2. модель
     setAsrStatus('Загружаю модель распознавания…');
     const model = $('#selModel').value;
-    const useGpu = $('#chkGpu').checked && !!navigator.gpu;
-    const files = {};
-    const pipe = await getAsrPipe(model, useGpu, info => {
-      if (info && info.status === 'progress' && info.file){
-        files[info.file] = info.progress || 0;
-        const vals = Object.values(files);
-        const avg = vals.reduce((a, b) => a + b, 0) / vals.length;
-        setAsrProg(0.3 + (avg / 100) * 0.35);
-        setAsrStatus('Скачиваю модель: ' + Math.round(avg) + '% (один раз, дальше из кеша)');
-      } else if (info && info.status === 'ready'){
-        setAsrStatus('Модель готова, распознаю…');
-      }
-    });
+    let useGpu = $('#chkGpu').checked && !!navigator.gpu;
+    let pipe = await getAsrPipe(model, useGpu, modelProgress());
+    useGpu = !!pipe.__svmGpu;                 // мог откатиться уже при сборке
     if (asrAbort) throw new Error('Отменено');
 
     // 3. распознавание
@@ -1175,17 +1282,24 @@ $('#btnAsr').addEventListener('click', async () => {
     const base = { chunk_length_s: 30, stride_length_s: 5, task: 'transcribe' };
     if (lang !== 'auto') base.language = lang;
 
-    let out, wordLevel = true;
+    let res;
     try {
-      out = await pipe(audio, Object.assign({}, base, { return_timestamps: 'word' }));
-      if (!out || !out.chunks || !out.chunks.length) throw new Error('нет пословных меток');
+      res = await transcribe(pipe, audio, base, useGpu);
     } catch(e){
-      wordLevel = false;
-      asrDiag.word = String(e && e.message || e);
-      setAsrStatus('Пословные метки недоступны — беру посегментные…');
-      out = await pipe(audio, Object.assign({}, base, { return_timestamps: true }));
+      // WebGPU иногда собирает модель, но валится уже на самом счёте
+      // («Failed to run JSEP kernel», «no GPU data for input»). Тихо
+      // переезжаем на процессор, чтобы пользователь не остался ни с чем.
+      if (!useGpu || !isGpuError(e)) throw e;
+      asrDiag.gpuRun = String(e && e.message || e);
+      banner('gpu','warn','<b>WebGPU не справился с этой моделью</b> — ваш драйвер отказал на первом же слое свёртки. Переключился на процессор: будет медленнее, но результат тот же. Галочку «Ускорение WebGPU» можно снять, чтобы не ждать дважды.');
+      setAsrStatus('WebGPU не справился, повторяю на процессоре…');
+      useGpu = false;
+      pipe = await getAsrPipe(model, false, modelProgress());
+      if (asrAbort) throw new Error('Отменено');
+      res = await transcribe(pipe, audio, base, false);
     }
     if (asrAbort) throw new Error('Отменено');
+    const out = res.out, wordLevel = res.wordLevel;
 
     const words = chunksToWords(out, wordLevel, Math.max(S.end - S.start, audio.length / 16000));
     if (!words.length){
@@ -1470,7 +1584,7 @@ window.__SVM = {
   ready: false,
   lastExport: null,
   setTrim, groupWords, chunksToWords, captureSegmentAudio, resampleTo16k,
-  outSize, cropRect, renderCues, asrDiag,
+  outSize, cropRect, renderCues, asrDiag, isGpuError, transcribe,
   setCues(arr){ S.cues = arr.map(c => ({ start: c.start, end: c.end, words: makeWords(c.text, c.start, c.end) })); renderCues(); }
 };
 
