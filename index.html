@@ -172,6 +172,9 @@ kbd{background:#100e1c;border:1px solid var(--line);border-bottom-width:2px;bord
 .presets{display:flex;gap:7px;flex-wrap:wrap}
 .presets button{flex:1 1 auto;padding:8px 10px;font-size:13px}
 
+/* подпись источника */
+.credit{margin-top:13px;padding-top:13px;border-top:1px solid var(--line)}
+
 /* список клипов */
 .tag{margin-left:auto;font-size:11px;font-weight:600;color:var(--acc);background:rgba(167,139,250,.13);
   border:1px solid rgba(167,139,250,.3);padding:2px 8px;border-radius:999px;letter-spacing:.2px}
@@ -445,6 +448,29 @@ footer a{color:var(--acc)}
         </div>
       </div>
       <p class="hint">Жирный шрифт с чёрной обводкой читается на любом фоне. Активное слово подсвечивается — эффект «караоке».</p>
+
+      <div class="credit">
+        <label class="chk"><input type="checkbox" id="crOn"> Подпись источника в кадре</label>
+        <div id="crBox" style="display:none;margin-top:9px">
+          <input type="text" id="crText" maxlength="120" placeholder="Например: отрывок из к/ф «Название», реж. Имя, 1999">
+          <div class="grid2" style="margin-top:9px">
+            <div>
+              <label class="f" for="crPos">Где показывать</label>
+              <select id="crPos">
+                <option value="bottom" selected>Внизу кадра</option>
+                <option value="top">Вверху кадра</option>
+              </select>
+            </div>
+            <div>
+              <label class="f" for="crSize">Размер — <span id="crSizeVal">2.2%</span></label>
+              <input type="range" id="crSize" min="1.2" max="4" step="0.1" value="2.2">
+            </div>
+          </div>
+          <p class="hint">Указание автора и источника — то, чего ждут от цитирования, обзора и разбора.
+            Само по себе оно не даёт права публиковать чужое видео, но без него правомерным
+            цитирование не будет.</p>
+        </div>
+      </div>
     </section>
 
     <!-- ШАГ 8 -->
@@ -575,6 +601,7 @@ const S = {
   blur: 18,
   bars: null,                                 // вшитые в исходник чёрные поля
   style: { size: 6.5, pos: 78, color: '#ffffff', active: '#ffd400', box: true, upper: false },
+  credit: { on: false, text: '', pos: 'bottom', size: 2.2 },
   playingClip: false,
   busy: false
 };
@@ -1011,7 +1038,38 @@ function drawFrame(ctx, W, H, tClip, drawSubs){
     }
   }
   ctx.restore();
-  if (drawSubs !== false) drawSubtitles(ctx, W, H, tClip);
+  if (drawSubs !== false){
+    drawSubtitles(ctx, W, H, tClip);
+    drawCredit(ctx, W, H);
+  }
+}
+
+/* Подпись источника: мелкая строка у края кадра, отдельно от субтитров. */
+function drawCredit(ctx, W, H){
+  const c = S.credit;
+  const text = String(c.text || '').trim().replace(/\s+/g, ' ');
+  if (!c.on || !text) return;
+  let fs = Math.max(9, H * c.size / 100);
+  ctx.save();
+  ctx.textBaseline = 'alphabetic';
+  ctx.lineJoin = 'round';
+  ctx.miterLimit = 2;
+  const setFont = s => { ctx.font = '600 ' + s + 'px "Segoe UI",Roboto,Arial,sans-serif'; };
+  setFont(fs);
+  const maxW = W * 0.92;
+  if (ctx.measureText(text).width > maxW){         // не влезло — уменьшаем
+    fs = Math.max(8, fs * maxW / ctx.measureText(text).width);
+    setFont(fs);
+  }
+  const w = ctx.measureText(text).width;
+  const x = (W - w) / 2;
+  const y = c.pos === 'top' ? fs * 1.7 : H - fs * 0.85;
+  ctx.lineWidth = fs * 0.24;
+  ctx.strokeStyle = 'rgba(0,0,0,0.8)';
+  ctx.strokeText(text, x, y);
+  ctx.fillStyle = 'rgba(255,255,255,0.93)';
+  ctx.fillText(text, x, y);
+  ctx.restore();
 }
 
 function cueAt(t){
@@ -1734,6 +1792,20 @@ bindStyle('#stActive','active', el => el.value);
 bindStyle('#stBox',   'box',    el => el.checked);
 bindStyle('#stUpper', 'upper',  el => el.checked);
 $('#selRes').addEventListener('change', () => { /* влияет только на экспорт */ });
+
+/* --------------------------- подпись источника --------------------------- */
+$('#crOn').addEventListener('change', e => {
+  S.credit.on = e.target.checked;
+  $('#crBox').style.display = S.credit.on ? '' : 'none';
+  drawPreview();
+});
+$('#crText').addEventListener('input', e => { S.credit.text = e.target.value; drawPreview(); });
+$('#crPos').addEventListener('change', e => { S.credit.pos = e.target.value; drawPreview(); });
+$('#crSize').addEventListener('input', e => {
+  S.credit.size = parseFloat(e.target.value);
+  $('#crSizeVal').textContent = S.credit.size.toFixed(1) + '%';
+  drawPreview();
+});
 
 /* ------------------------- редактор субтитров ---------------------------- */
 const cuesEl = $('#cues');
@@ -3259,7 +3331,7 @@ window.__SVM = {
   lastExport: null,
   lastZip: null,
   setTrim, groupWords, chunksToWords, captureSegmentAudio, resampleTo16k,
-  outSize, cropRect, contentRect, coverRect, detectBlackBars, applyCropUi,
+  outSize, cropRect, contentRect, coverRect, detectBlackBars, applyCropUi, drawCredit,
   renderCues, asrDiag, isGpuError, transcribe,
   selectClip, splitPlan, zipStore, crc32, syncClipUi,
   undo, redo, pushUndo, findPauses, analyzeWholeVideo, drawWave,
