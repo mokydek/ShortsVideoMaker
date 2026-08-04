@@ -310,8 +310,29 @@ footer a{color:var(--acc)}
     <section class="card">
       <h2><i>2</i>Клипы</h2>
       <div class="row">
-        <button id="btnAddClip">＋ Добавить клип</button>
-        <button id="btnSplit" class="ghost">✂ Нарезать всё видео</button>
+        <button id="btnAuto" class="primary">🤖 Собрать лучшие моменты</button>
+        <button id="btnSplit" class="ghost">✂ Нарезать всё подряд</button>
+        <button id="btnAddClip" class="ghost">＋ Вручную</button>
+      </div>
+      <div id="autoBox" class="splitbox">
+        <div class="grid3">
+          <div><label class="f" for="auCount">Сколько клипов</label><input type="number" id="auCount" min="1" max="30" step="1" value="5"></div>
+          <div><label class="f" for="auLen">Длина, сек</label><input type="number" id="auLen" min="10" max="180" step="1" value="45"></div>
+          <div><label class="f" for="auMode">Что искать</label>
+            <select id="auMode">
+              <option value="mix" selected>Живые моменты</option>
+              <option value="talk">Больше речи</option>
+              <option value="loud">Громкие сцены</option>
+              <option value="laugh">Смех и реакции</option>
+            </select>
+          </div>
+        </div>
+        <label class="chk" style="margin-top:10px"><input type="checkbox" id="auAsr" checked> Сразу распознать речь во всех выбранных</label>
+        <div class="row" style="margin-top:10px">
+          <button id="btnAutoGo" class="primary">Собрать</button>
+          <button id="btnAutoCancel" class="ghost" style="flex:0 0 auto">Отмена</button>
+        </div>
+        <p class="hint" id="autoHint">Приложение оценивает звук: где больше речи, где громче и живее, где похоже на смех. Это подсказка по звуку, а не понимание смысла — итог всё равно стоит просмотреть.</p>
       </div>
       <div id="splitBox" class="splitbox">
         <div class="grid3">
@@ -1433,6 +1454,7 @@ async function analyzeWholeVideo(){
   const floor = pick(0.10), speech = pick(0.85);
   const pauses = findPauses(env, WAVE_HZ, floor, speech);
   waveData = { env, hz: WAVE_HZ, floor, speech, pauses, channels: ch };
+  autoIndex = null;                             // пересчитается при подборе
   note.textContent = 'Звук разобран: пауз в речи найдено ' + pauses.length +
     ' — по ним и будет резать.';
   drawWave();
@@ -1558,12 +1580,13 @@ function renderClips(){
     const words = c.cues.reduce((a, x) => a + x.words.length, 0);
     const subs = c.cues.length ? c.cues.length + ' реплик, ' + words + ' слов' : 'без субтитров';
     const done = c.out ? 'готов ' + fmtSize(c.out.size) + ' · ' : '';
+    const why = c.why ? '<b style="color:var(--acc)">' + esc(c.why) + '</b> · ' : '';
     html += '<div class="clip' + (i === S.active ? ' on' : '') + '" data-i="' + i + '">' +
       '<div class="num">' + (i + 1) + '</div>' +
       '<div class="meta">' +
         '<div class="when"><span class="dot ' + (c.out ? 'ready' : '') + '"></span>' +
           fmtTime(c.start) + ' → ' + fmtTime(c.end) + ' · ' + (c.end - c.start).toFixed(1) + ' с</div>' +
-        '<div class="sub">' + done + esc(subs) + '</div>' +
+        '<div class="sub">' + why + done + esc(subs) + '</div>' +
       '</div>' +
       '<div class="acts">' +
         (c.out ? '<a href="' + c.out.url + '" download="' + esc(c.out.name) + '" title="Скачать клип">⬇</a>' : '') +
@@ -1640,9 +1663,173 @@ $('#btnAddClip').addEventListener('click', () => {
   if (rows.length) rows[rows.length - 1].scrollIntoView({ block: 'nearest' });
 });
 
+/* ==================== автоподбор интересных мест =======================
+   По готовой картине громкости считаем для каждого возможного окна три
+   вещи: сколько там речи, насколько громко и насколько «рвано» звучит
+   (рваность — это смех, реакции, перебивки). Дальше берём лучшие окна,
+   не пересекающиеся между собой, и подтягиваем их границы к паузам.
+   Это оценка по звуку, а не понимание смысла — так и написано в интерфейсе. */
+let autoIndex = null;
+
+function buildAutoIndex(){
+  if (!waveData) return null;
+  const { env, hz, floor, speech } = waveData;
+  const n = env.length;
+  const speechThr = floor + 0.35 * Math.max(1e-6, speech - floor);
+  const hi = floor + 0.65 * Math.max(1e-6, speech - floor);
+  const lo = floor + 0.30 * Math.max(1e-6, speech - floor);
+
+  const pSpeech = new Float64Array(n + 1);
+  const pEnergy = new Float64Array(n + 1);
+  const pBurst = new Float64Array(n + 1);
+  let above = false;
+  for (let i = 0; i < n; i++){
+    const v = env[i];
+    let burst = 0;
+    if (!above && v > hi){ above = true; burst = 1; }
+    else if (above && v < lo) above = false;
+    pSpeech[i + 1] = pSpeech[i] + (v > speechThr ? 1 : 0);
+    pEnergy[i + 1] = pEnergy[i] + v;
+    pBurst[i + 1] = pBurst[i] + burst;
+  }
+  return { n, hz, speech, pSpeech, pEnergy, pBurst };
+}
+
+function scoreWindow(ix, a, b){
+  const i0 = clamp(Math.floor(a * ix.hz), 0, ix.n);
+  const i1 = clamp(Math.ceil(b * ix.hz), i0 + 1, ix.n);
+  const len = i1 - i0;
+  const speechFrac = (ix.pSpeech[i1] - ix.pSpeech[i0]) / len;
+  const energy = (ix.pEnergy[i1] - ix.pEnergy[i0]) / len / Math.max(1e-6, ix.speech);
+  const burstsPerSec = (ix.pBurst[i1] - ix.pBurst[i0]) / Math.max(0.5, b - a);
+  return { speechFrac, energy: clamp(energy, 0, 1.6), burstsPerSec };
+}
+
+function weighted(m, mode){
+  const laughLike = clamp(m.burstsPerSec / 3, 0, 1);
+  if (mode === 'talk') return m.speechFrac * 0.85 + m.energy * 0.15;
+  if (mode === 'loud') return m.energy * 0.75 + m.speechFrac * 0.25;
+  if (mode === 'laugh') return laughLike * 0.6 + m.speechFrac * 0.25 + m.energy * 0.15;
+  return m.speechFrac * 0.45 + m.energy * 0.3 + laughLike * 0.25;
+}
+
+function whyLabel(m){
+  const laughLike = m.burstsPerSec / 3;
+  if (laughLike > 0.6 && m.speechFrac < 0.75) return 'живая реакция';
+  if (m.speechFrac > 0.72) return 'плотная речь';
+  if (m.energy > 0.85) return 'громкая сцена';
+  if (m.speechFrac > 0.5) return 'разговор';
+  return 'заметный момент';
+}
+
+/* Подтягиваем границу к ближайшей паузе, чтобы фраза не оборвалась. */
+function snapToPause(t, limit){
+  if (!waveData || !waveData.pauses.length) return t;
+  let best = t, dist = limit || 3;
+  for (const p of waveData.pauses){
+    const d = Math.abs(p.mid - t);
+    if (d < dist){ dist = d; best = p.mid; }
+  }
+  return best;
+}
+
+function autoPickClips(count, len, mode){
+  const ix = autoIndex || (autoIndex = buildAutoIndex());
+  if (!ix) return [];
+  const D = S.duration;
+  if (D < len) return [[0, D, { speechFrac: 1, energy: 1, burstsPerSec: 0 }]];
+
+  const step = Math.max(1, len / 6);
+  const cands = [];
+  for (let a = 0; a + len <= D + 0.01; a += step){
+    const m = scoreWindow(ix, a, a + len);
+    cands.push({ a, b: a + len, m, s: weighted(m, mode) });
+  }
+  cands.sort((x, y) => y.s - x.s);
+
+  const picked = [];
+  const GAP = Math.max(2, len * 0.15);
+  for (const c of cands){
+    if (picked.length >= count) break;
+    if (picked.some(p => c.a < p.b + GAP && c.b > p.a - GAP)) continue;
+    picked.push(c);
+  }
+  picked.sort((x, y) => x.a - y.a);
+
+  // границы — к паузам, но не наезжая на соседей
+  const out = [];
+  for (let i = 0; i < picked.length; i++){
+    const p = picked[i];
+    let a = snapToPause(p.a, Math.min(3, len * 0.12));
+    let b = snapToPause(p.b, Math.min(3, len * 0.12));
+    const prevEnd = out.length ? out[out.length - 1][1] : 0;
+    a = clamp(a, prevEnd, D - 1);
+    b = clamp(b, a + Math.max(3, len * 0.4), D);
+    out.push([a, b, p.m]);
+  }
+  return out;
+}
+
+$('#btnAuto').addEventListener('click', () => {
+  $('#autoBox').classList.toggle('on');
+  $('#splitBox').classList.remove('on');
+  updateAutoHint();
+});
+$('#btnAutoCancel').addEventListener('click', () => $('#autoBox').classList.remove('on'));
+['#auCount', '#auLen', '#auMode'].forEach(id => $(id).addEventListener('input', updateAutoHint));
+$('#auMode').addEventListener('change', updateAutoHint);
+
+function updateAutoHint(){
+  const base = 'Приложение оценивает звук: где больше речи, где громче и живее, ' +
+    'где похоже на смех. Это подсказка по звуку, а не понимание смысла — ' +
+    'итог всё равно стоит просмотреть.';
+  $('#autoHint').innerHTML = waveData
+    ? base
+    : '<span style="color:var(--warn)">Звук ещё разбирается — подождите пару секунд.</span> ' + base;
+}
+
+$('#btnAutoGo').addEventListener('click', async () => {
+  if (S.busy){ banner('busy','warn','Дождитесь окончания текущей операции.'); return; }
+  if (!S.duration) return;
+  if (!waveData){
+    banner('auto','warn','<b>Звук ещё не разобран.</b> Подождите пару секунд — ' +
+      'без него выбирать не по чему. Если разбор не удался, воспользуйтесь ' +
+      '«✂ Нарезать всё подряд».');
+    return;
+  }
+  const count = clamp(parseInt($('#auCount').value, 10) || 5, 1, 30);
+  const len = clamp(parseFloat($('#auLen').value) || 45, 5, 300);
+  const mode = $('#auMode').value;
+
+  const picks = autoPickClips(count, len, mode);
+  if (!picks.length){
+    banner('auto','warn','Не нашлось подходящих мест — попробуйте другую длину.');
+    return;
+  }
+  pushUndo();
+  S.clips = picks.map(([a, b, m]) => {
+    const c = makeClip(a, b);
+    c.why = whyLabel(m);
+    return c;
+  });
+  S.active = 0;
+  $('#autoBox').classList.remove('on');
+  syncClipUi();
+  try { video.currentTime = S.clips[0].start; } catch(e){}
+  banner('auto','ok','<b>Выбрано ' + picks.length + ' моментов.</b> ' +
+    'Рядом с каждым написано, чем он приглянулся. Послушайте их кнопкой ▶ и ' +
+    'поправьте границы, где нужно — выбор сделан по звуку, а не по смыслу.');
+  setTimeout(() => dropBanner('auto'), 12000);
+
+  if ($('#auAsr').checked){
+    await runAsr(S.clips.map((_, i) => i));
+  }
+});
+
 /* --- автонарезка всего видео на равные части --- */
 $('#btnSplit').addEventListener('click', () => {
   $('#splitBox').classList.toggle('on');
+  $('#autoBox').classList.remove('on');
   updateSplitHint();
 });
 $('#btnSplitCancel').addEventListener('click', () => $('#splitBox').classList.remove('on'));
@@ -3336,6 +3523,8 @@ window.__SVM = {
   selectClip, splitPlan, zipStore, crc32, syncClipUi,
   undo, redo, pushUndo, findPauses, analyzeWholeVideo, drawWave,
   loadFromUrl, looksLikeUrl,
+  autoPickClips, buildAutoIndex, scoreWindow, whyLabel, snapToPause,
+  clipReasons(){ return S.clips.map(c => c.why || null); },
   wave(){ return waveData ? { pauses: waveData.pauses.length, hz: waveData.hz,
                               floor: +waveData.floor.toFixed(5),
                               speech: +waveData.speech.toFixed(5),
