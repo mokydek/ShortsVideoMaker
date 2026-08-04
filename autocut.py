@@ -125,7 +125,7 @@ def load_transcript(path: Path, video: Path, model: str, lang: str) -> dict | No
     if not path.exists():
         return None
     try:
-        with open(path, "r", encoding="utf-8") as fh:
+        with open(path, "r", encoding="utf-8-sig") as fh:
             data = json.load(fh)
     except (json.JSONDecodeError, OSError):
         return None

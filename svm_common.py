@@ -148,7 +148,8 @@ def load_config(path: str | os.PathLike | None = None) -> dict:
              "(pip install -r requirements.txt).")
         return json.loads(json.dumps(DEFAULTS))
     try:
-        with open(path, "r", encoding="utf-8") as fh:
+        # utf-8-sig — чтобы файл, сохранённый Блокнотом с BOM, тоже читался
+        with open(path, "r", encoding="utf-8-sig") as fh:
             user = yaml.safe_load(fh) or {}
     except Exception as exc:                                   # noqa: BLE001
         warn(f"Не смог прочитать {path.name} ({exc}) — беру значения по умолчанию.")
