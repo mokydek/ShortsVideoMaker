@@ -2016,6 +2016,38 @@ function pickMime(preferMp4){
   }
   return '';
 }
+/* Первый в сессии MediaRecorder заводится долго: браузер инициализирует
+   кодировщик, компилирует шейдеры, выделяет буферы. Если это случится уже
+   во время записи, секунды застывшего кадра уедут прямо в клип — запись
+   идёт по стенным часам. Поэтому один раз прогреваем на пустом холсте. */
+let encoderWarm = false;
+async function warmUpEncoder(W, H, mime){
+  if (encoderWarm || !window.MediaRecorder) return;
+  encoderWarm = true;
+  try {
+    const c = document.createElement('canvas');
+    c.width = W; c.height = H;
+    const x = c.getContext('2d', { alpha: false });
+    const s = c.captureStream(30);
+    const opts = { videoBitsPerSecond: 2e6 };
+    if (mime) opts.mimeType = mime;
+    const r = new MediaRecorder(s, opts);
+    const stopped = new Promise(res => { r.onstop = res; setTimeout(res, 4000); });
+    r.start();
+    const t0 = performance.now();
+    while (performance.now() - t0 < 500){
+      x.fillStyle = (performance.now() % 100 < 50) ? '#000' : '#111';
+      x.fillRect(0, 0, W, H);
+      await sleep(30);
+    }
+    if (r.state !== 'inactive') r.stop();
+    await stopped;
+    s.getTracks().forEach(t => { try { t.stop(); } catch(e){} });
+  } catch(e){
+    asrDiag.warmup = String(e && e.message || e);
+  }
+}
+
 function setExpStatus(t){ $('#expStatus').textContent = t; }
 function setExpProg(p){
   const box = $('#expProg');
@@ -2222,6 +2254,10 @@ async function doExport(){
   let g = null, dest = null, rec = null, raf = 0, savedMon = 1;
 
   try {
+    if (!encoderWarm){
+      setExpStatus('Прогреваю кодировщик — секунду…');
+      await warmUpEncoder(W, H, pickMime($('#chkMp4').checked));
+    }
     setExpStatus('Готовлю дорожки…');
     drawFrame(ctx, W, H, 0);
 
@@ -2288,7 +2324,21 @@ async function doExport(){
     const diag = { frames: 0, maxGap: 0, startedAt: video.currentTime };
     let lastTick = t0;
 
+    /* Момент остановки проверяем отдельным таймером, а не в цикле отрисовки:
+       на слабой машине между кадрами проходят сотни миллисекунд, и запись
+       успевала уехать заметно дальше выбранного конца. */
     await new Promise(res => {
+      let finished = false;
+      const stop = () => {
+        if (finished) return;
+        finished = true;
+        clearInterval(watch);
+        cancelAnimationFrame(raf);
+        res();
+      };
+      const done = () => exportAbort || video.ended
+        || video.currentTime >= S.end - 0.005 || performance.now() - t0 > limit;
+      const watch = setInterval(() => { if (done()) stop(); }, 20);
       const tick = () => {
         const now = performance.now();
         diag.maxGap = Math.max(diag.maxGap, now - lastTick);
@@ -2297,8 +2347,7 @@ async function doExport(){
         const t = video.currentTime - S.start;
         drawFrame(ctx, W, H, t);
         setExpProg(clamp(t / total, 0, 1));
-        const timeUp = now - t0 > limit;
-        if (exportAbort || video.ended || video.currentTime >= S.end - 0.005 || timeUp){ res(); return; }
+        if (done()){ stop(); return; }
         raf = requestAnimationFrame(tick);
       };
       raf = requestAnimationFrame(tick);
@@ -2350,6 +2399,20 @@ async function doExport(){
 
     window.__SVM.lastExport = { size: blob.size, type, W, H, ext, name, clip: S.active + 1,
                                 diag: { ...diag, want: total } };
+
+    /* Запись идёт по стенным часам: если браузер подтормаживал, лишние секунды
+       уедут в клип застывшим кадром. Содержимое при этом правильное, но лучше
+       сказать честно и подсказать, что делать. */
+    const lag = diag.wallMs / 1000 - diag.mediaSpan;
+    if (lag > Math.max(0.8, total * 0.25)){
+      banner('lag','warn',
+        '<b>Компьютер не успевал за записью</b> — клип вышел примерно на ' +
+        lag.toFixed(1) + ' с длиннее заданного, лишнее это подвисшие кадры. ' +
+        'Помогает: качество 720p вместо 1080p, 25 кадр/с вместо 30 и закрытые ' +
+        'лишние вкладки и программы.');
+    } else if (lag < 0.6){
+      dropBanner('lag');
+    }
 
   } catch(err){
     cancelAnimationFrame(raf);
