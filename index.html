@@ -143,6 +143,31 @@ label.f{display:block;font-size:12px;color:var(--muted);margin:0 0 5px}
 .cue-head{display:grid;grid-template-columns:78px 78px 1fr 30px;gap:7px;padding:6px 8px;font-size:11px;
   color:var(--muted);border-bottom:1px solid var(--line);position:sticky;top:0;background:#15122480;backdrop-filter:blur(6px)}
 
+/* волна звука и ручки на таймлайне */
+#tlWave{position:absolute;inset:0;width:100%;height:100%;display:block;opacity:.85;pointer-events:none}
+.tl{height:46px}
+.tl-grip{position:absolute;top:0;bottom:0;width:11px;margin-left:-5px;cursor:ew-resize;display:none;
+  z-index:3;touch-action:none}
+.tl-grip::after{content:"";position:absolute;left:4px;top:5px;bottom:5px;width:3px;border-radius:2px;
+  background:var(--acc);box-shadow:0 0 6px rgba(167,139,250,.8)}
+.tl-grip:hover::after,.tl-grip.drag::after{background:#fff;box-shadow:0 0 9px #fff}
+.tl-grip.on{display:block}
+
+/* горячие клавиши */
+.keys{margin-top:10px;font-size:12.5px;color:var(--muted)}
+.keys summary{cursor:pointer;list-style:none;padding:6px 0;user-select:none}
+.keys summary::-webkit-details-marker{display:none}
+.keys summary::before{content:"⌨ ";}
+.keys[open] summary{color:var(--txt)}
+.keygrid{display:grid;grid-template-columns:1fr 1fr;gap:5px 12px;padding:6px 0 2px}
+@media(max-width:520px){.keygrid{grid-template-columns:1fr}}
+kbd{background:#100e1c;border:1px solid var(--line);border-bottom-width:2px;border-radius:5px;
+  padding:1px 5px;font:600 11px/1.6 "Cascadia Mono",Consolas,monospace;color:var(--txt)}
+
+/* пресеты стиля */
+.presets{display:flex;gap:7px;flex-wrap:wrap}
+.presets button{flex:1 1 auto;padding:8px 10px;font-size:13px}
+
 /* список клипов */
 .tag{margin-left:auto;font-size:11px;font-weight:600;color:var(--acc);background:rgba(167,139,250,.13);
   border:1px solid rgba(167,139,250,.3);padding:2px 8px;border-radius:999px;letter-spacing:.2px}
@@ -225,18 +250,41 @@ footer a{color:var(--acc)}
       <div class="stage"><canvas id="preview" width="360" height="640"></canvas></div>
 
       <div class="tl" id="tl">
+        <canvas id="tlWave" aria-hidden="true"></canvas>
         <div id="tlClips"></div>
         <div class="tl-sel" id="tlSel"></div>
+        <div class="tl-grip l" id="gripL" title="Потяните — начало клипа"></div>
+        <div class="tl-grip r" id="gripR" title="Потяните — конец клипа"></div>
         <div class="tl-head" id="tlHead"></div>
         <div class="tl-lab" id="tlLab">видео не выбрано</div>
       </div>
       <input type="range" id="seek" min="0" max="1" step="0.001" value="0" disabled aria-label="Перемотка">
 
       <div class="playbar">
-        <button id="btnPlay" class="sm" disabled title="Играть / пауза">▶ Играть</button>
-        <button id="btnClip" class="sm" disabled title="Проиграть только выбранный отрезок">🎧 Прослушать отрывок</button>
+        <button id="btnPlay" class="sm" disabled title="Играть / пауза — пробел">▶ Играть</button>
+        <button id="btnClip" class="sm" disabled title="Проиграть только выбранный клип — C">🎧 Клип</button>
+        <button id="btnUndo" class="sm ghost" disabled title="Отменить — Ctrl+Z">↶</button>
+        <button id="btnRedo" class="sm ghost" disabled title="Вернуть — Ctrl+Y">↷</button>
         <span class="time mono" id="tCur">0:00.0 / 0:00.0</span>
       </div>
+      <div class="hint" id="waveNote" style="margin-top:8px"></div>
+      <details class="keys">
+        <summary>Горячие клавиши</summary>
+        <div class="keygrid">
+          <span><kbd>Пробел</kbd> играть / пауза</span>
+          <span><kbd>C</kbd> проиграть клип</span>
+          <span><kbd>←</kbd> <kbd>→</kbd> на кадр</span>
+          <span><kbd>Shift</kbd>+<kbd>←</kbd><kbd>→</kbd> на секунду</span>
+          <span><kbd>J</kbd> <kbd>L</kbd> ±5 секунд</span>
+          <span><kbd>I</kbd> начало клипа здесь</span>
+          <span><kbd>O</kbd> конец клипа здесь</span>
+          <span><kbd>N</kbd> новый клип</span>
+          <span><kbd>1</kbd>…<kbd>9</kbd> выбрать клип</span>
+          <span><kbd>Ctrl</kbd>+<kbd>Z</kbd> отменить</span>
+          <span><kbd>Ctrl</kbd>+<kbd>Y</kbd> вернуть</span>
+          <span><kbd>Delete</kbd> удалить клип</span>
+        </div>
+      </details>
     </section>
   </div>
 
@@ -256,6 +304,7 @@ footer a{color:var(--acc)}
           <div><label class="f" for="spMin">Не короче</label><input type="number" id="spMin" min="3" max="600" step="1" value="25"></div>
           <div><label class="f" for="spMax">Не длиннее</label><input type="number" id="spMax" min="5" max="900" step="1" value="70"></div>
         </div>
+        <label class="chk" style="margin-top:10px"><input type="checkbox" id="chkPause" checked> Резать только в паузах речи <span class="hint" style="margin:0">— фраза не оборвётся на середине</span></label>
         <div class="row" style="margin-top:10px">
           <button id="btnSplitGo" class="primary">Нарезать</button>
           <button id="btnSplitCancel" class="ghost" style="flex:0 0 auto">Отмена</button>
@@ -352,7 +401,13 @@ footer a{color:var(--acc)}
     <!-- ШАГ 7 -->
     <section class="card">
       <h2><i>7</i>Стиль субтитров</h2>
-      <div class="grid2">
+      <div class="presets" id="presets">
+        <button data-p="tiktok">TikTok</button>
+        <button data-p="youtube">YouTube</button>
+        <button data-p="minimal">Минимал</button>
+        <button data-p="neon">Неон</button>
+      </div>
+      <div class="grid2" style="margin-top:11px">
         <div>
           <label class="f" for="stSize">Размер — <span id="stSizeVal">6.5%</span></label>
           <input type="range" id="stSize" min="3" max="13" step="0.1" value="6.5">
@@ -618,10 +673,12 @@ async function onMeta(){
   $('#tools').classList.remove('dis');
   $('#spTarget').value = String(Math.min(45, Math.max(10, Math.round(S.duration / 6))));
 
+  undoStack.length = 0; redoStack.length = 0; refreshUndoUi();
   syncClipUi();
   resizePreview();
   drawPreview();
   startLoop();
+  analyzeWholeVideo();                        // волна и паузы — в фоне
 
   $('#fileinfo').innerHTML += ' · ' + S.vw + '×' + S.vh + ' · ' + fmtTime(S.duration);
   if (window.__SVM) window.__SVM.ready = true;
@@ -792,6 +849,7 @@ function updateTimeUi(){
     $('#tlSel').style.width = ((S.end - S.start) / d * 100) + '%';
     $('#tlHead').style.left = (clamp(video.currentTime / d, 0, 1) * 100) + '%';
     $('#tlLab').textContent = '';
+    if (!gripDrag) placeGrips();
   }
   $('#btnPlay').textContent = video.paused ? '▶ Играть' : '⏸ Пауза';
   highlightCue();
@@ -881,6 +939,146 @@ $('#btnSetEnd')  .addEventListener('click', () => setTrim(Math.min(S.start, vide
 $('#inStart').addEventListener('change', e => setTrim(parseFloat(e.target.value) || 0, S.end));
 $('#inEnd')  .addEventListener('change', e => setTrim(S.start, parseFloat(e.target.value) || 0));
 
+/* ====================== звук всего видео: волна и паузы ==================
+   Раз файл всё равно разбирается целиком ради субтитров, посчитаем по нему
+   и картину громкости на весь ролик. Она даёт две вещи: волну на таймлайне,
+   по которой видно, где речь, и точки пауз, по которым можно резать так,
+   чтобы фраза не обрывалась на середине.                                 */
+const WAVE_HZ = 50;                                // кадров огибающей в секунду
+let waveData = null;                               // { env, hz, floor, speech, pauses }
+
+function findPauses(env, hz, floor, speech){
+  const thr = floor + 0.22 * Math.max(1e-6, speech - floor);
+  const MIN = Math.round(0.35 * hz);               // пауза короче — не в счёт
+  const out = [];
+  let run = 0;
+  for (let i = 0; i <= env.length; i++){
+    const quiet = i < env.length && env[i] <= thr;
+    if (quiet){ run++; continue; }
+    if (run >= MIN){
+      const a = (i - run) / hz, b = i / hz;
+      out.push({ a, b, mid: (a + b) / 2, len: b - a });
+    }
+    run = 0;
+  }
+  return out;
+}
+
+async function analyzeWholeVideo(){
+  waveData = null;
+  drawWave();
+  if (!S.hasVideoTrack) return;
+  const note = $('#waveNote');
+  note.textContent = 'Разбираю звук, чтобы показать волну и резать по паузам…';
+  const buf = await decodeWholeAudio(null);
+  if (!buf){
+    note.innerHTML = 'Волна недоступна: звук не удалось разобрать целиком' +
+      (asrDiag.decode ? ' (' + esc(String(asrDiag.decode)) + ')' : '') +
+      '. Нарезка будет по времени, всё остальное работает.';
+    return;
+  }
+  const sr = buf.sampleRate || SR;
+  const frame = Math.max(1, Math.round(sr / WAVE_HZ));
+  const n = Math.floor(buf.length / frame);
+  const ch = Math.max(1, buf.numberOfChannels);
+  const data = buf.getChannelData(0);
+  const env = new Float32Array(n);
+  for (let i = 0; i < n; i++){
+    let s = 0;
+    for (let j = 0; j < frame; j++){ const v = data[i * frame + j] || 0; s += v * v; }
+    env[i] = Math.sqrt(s / frame);
+  }
+  const sorted = Array.from(env).sort((a, b) => a - b);
+  const pick = q => sorted[clamp(Math.floor(sorted.length * q), 0, sorted.length - 1)] || 0;
+  const floor = pick(0.10), speech = pick(0.85);
+  const pauses = findPauses(env, WAVE_HZ, floor, speech);
+  waveData = { env, hz: WAVE_HZ, floor, speech, pauses, channels: ch };
+  note.textContent = 'Звук разобран: пауз в речи найдено ' + pauses.length +
+    ' — по ним и будет резать.';
+  drawWave();
+  updateSplitHint();
+}
+
+function drawWave(){
+  const c = $('#tlWave');
+  const box = $('#tl').getBoundingClientRect();
+  const W = Math.max(1, Math.round(box.width)), H = Math.max(1, Math.round(box.height));
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  c.width = Math.round(W * dpr); c.height = Math.round(H * dpr);
+  const x = c.getContext('2d');
+  x.setTransform(dpr, 0, 0, dpr, 0, 0);
+  x.clearRect(0, 0, W, H);
+  if (!waveData || !S.duration) return;
+
+  const { env, hz, floor, speech } = waveData;
+  const mid = H / 2;
+  const scale = Math.max(1e-6, speech * 1.35);
+  x.fillStyle = 'rgba(167,139,250,0.34)';
+  for (let px = 0; px < W; px++){
+    const t0 = px / W * S.duration, t1 = (px + 1) / W * S.duration;
+    const i0 = clamp(Math.floor(t0 * hz), 0, env.length - 1);
+    const i1 = clamp(Math.ceil(t1 * hz), i0 + 1, env.length);
+    let peak = 0;
+    for (let i = i0; i < i1; i++) if (env[i] > peak) peak = env[i];
+    const h = clamp(peak / scale, 0, 1) * (H * 0.42);
+    x.fillRect(px, mid - h, 1, Math.max(1, h * 2));
+  }
+  // паузы — светлые полоски по нижней кромке
+  x.fillStyle = 'rgba(52,211,153,0.5)';
+  for (const p of waveData.pauses){
+    const px = p.a / S.duration * W, w = Math.max(1, (p.b - p.a) / S.duration * W);
+    x.fillRect(px, H - 3, w, 3);
+  }
+}
+
+/* ------------------------------- отмена ---------------------------------- */
+/* Снимок списка клипов перед всем, что что-то стирает. Готовые файлы клипов
+   в снимок кладём по ссылке и не освобождаем при удалении — иначе после
+   отмены кнопка «скачать» вела бы в никуда. */
+const undoStack = [], redoStack = [];
+const UNDO_MAX = 40;
+
+function snapshot(){
+  return {
+    active: S.active,
+    clips: S.clips.map(c => ({
+      id: c.id, start: c.start, end: c.end, pan: c.pan, out: c.out,
+      cues: c.cues.map(q => ({ start: q.start, end: q.end, sound: q.sound,
+                               words: q.words.map(w => ({ ...w })) }))
+    }))
+  };
+}
+function applySnapshot(s){
+  S.clips = s.clips.map(c => ({ ...c, cues: c.cues.map(q => ({ ...q,
+    words: q.words.map(w => ({ ...w })) })) }));
+  S.active = clamp(s.active, 0, Math.max(0, S.clips.length - 1));
+  syncClipUi();
+}
+function pushUndo(){
+  undoStack.push(snapshot());
+  if (undoStack.length > UNDO_MAX) undoStack.shift();
+  redoStack.length = 0;
+  refreshUndoUi();
+}
+function refreshUndoUi(){
+  $('#btnUndo').disabled = !undoStack.length;
+  $('#btnRedo').disabled = !redoStack.length;
+}
+function undo(){
+  if (!undoStack.length) return;
+  redoStack.push(snapshot());
+  applySnapshot(undoStack.pop());
+  refreshUndoUi();
+}
+function redo(){
+  if (!redoStack.length) return;
+  undoStack.push(snapshot());
+  applySnapshot(redoStack.pop());
+  refreshUndoUi();
+}
+$('#btnUndo').addEventListener('click', undo);
+$('#btnRedo').addEventListener('click', redo);
+
 /* -------------------------------- клипы ---------------------------------- */
 function dropClips(){
   S.clips.forEach(c => { if (c.out && c.out.url){ try { URL.revokeObjectURL(c.out.url); } catch(e){} } });
@@ -896,6 +1094,7 @@ function syncClipUi(){
   const tag = '№' + (S.clips.length ? S.active + 1 : '—');
   $('#curTag').textContent = tag;
   $('#cueTag').textContent = tag;
+  placeGrips();
   drawPreview();
 }
 
@@ -956,8 +1155,8 @@ $('#clipList').addEventListener('click', async e => {
   const act = e.target.dataset.a;
   if (act === 'del'){
     if (S.busy){ banner('busy','warn','Дождитесь окончания текущей операции.'); return; }
-    const c = S.clips[i];
-    if (c && c.out && c.out.url){ try { URL.revokeObjectURL(c.out.url); } catch(err){} }
+    // готовый файл не освобождаем: Ctrl+Z должен вернуть клип вместе с ним
+    pushUndo();
     S.clips.splice(i, 1);
     S.active = clamp(S.active > i ? S.active - 1 : S.active, 0, Math.max(0, S.clips.length - 1));
     syncClipUi();
@@ -965,6 +1164,7 @@ $('#clipList').addEventListener('click', async e => {
   }
   if (act === 'dup'){
     if (S.busy) return;
+    pushUndo();
     const c = S.clips[i];
     const copy = makeClip(c.start, c.end);
     copy.pan = c.pan;
@@ -987,6 +1187,7 @@ $('#clipList').addEventListener('click', async e => {
 
 $('#btnAddClip').addEventListener('click', () => {
   if (!S.hasVideoTrack) return;
+  pushUndo();
   const last = S.clips.length ? Math.max(...S.clips.map(c => c.end)) : 0;
   let a = S.clips.length ? last : video.currentTime;
   if (a >= S.duration - 0.5) a = clamp(video.currentTime, 0, Math.max(0, S.duration - 1));
@@ -1007,20 +1208,46 @@ $('#btnSplit').addEventListener('click', () => {
 $('#btnSplitCancel').addEventListener('click', () => $('#splitBox').classList.remove('on'));
 ['#spTarget', '#spMin', '#spMax'].forEach(id => $(id).addEventListener('input', updateSplitHint));
 
-function splitPlan(target, mn, mx){
+function splitPlan(target, mn, mx, byPause){
   const D = S.duration;
   const parts = [];
+  const pauses = (byPause && waveData) ? waveData.pauses : null;
   let pos = 0, guard = 0;
   while (D - pos > 0.05 && guard++ < 10000){
     if (D - pos <= mx){ parts.push([pos, D]); break; }
-    parts.push([pos, pos + target]);
-    pos += target;
+    let cut = pos + target;
+    if (pauses && pauses.length){
+      // ищем паузу поближе к желаемой длине, но в допустимых рамках
+      const lo = pos + mn, hi = pos + mx;
+      let best = null, bestDist = Infinity;
+      for (const p of pauses){
+        if (p.mid < lo || p.mid > hi) continue;
+        const dist = Math.abs(p.mid - (pos + target));
+        if (dist < bestDist){ bestDist = dist; best = p; }
+      }
+      if (best) cut = best.mid;
+    }
+    cut = clamp(cut, pos + mn, Math.min(pos + mx, D));
+    parts.push([pos, cut]);
+    pos = cut;
   }
-  if (parts.length >= 2){                     // короткий хвост приклеиваем к предыдущему
+  if (parts.length >= 2){
     const tail = parts[parts.length - 1];
-    if (tail[1] - tail[0] < mn && tail[1] - parts[parts.length - 2][0] <= mx){
-      parts[parts.length - 2][1] = tail[1];
-      parts.pop();
+    const prev = parts[parts.length - 2];
+    if (tail[1] - tail[0] < mn){
+      if (tail[1] - prev[0] <= mx){
+        // влезает — просто приклеиваем хвост к предыдущей части
+        prev[1] = tail[1];
+        parts.pop();
+      } else {
+        // не влезает — сдвигаем общую границу так, чтобы обе части были не
+        // короче минимума; иначе на выходе оказывался огрызок
+        const shift = Math.min(D - mn, prev[1] + (mn - (tail[1] - tail[0])));
+        if (shift - prev[0] >= mn){
+          prev[1] = shift;
+          tail[0] = shift;
+        }
+      }
     }
   }
   return parts;
@@ -1036,11 +1263,16 @@ function splitParams(){
 function updateSplitHint(){
   if (!S.duration) return;
   const { target, mn, mx } = splitParams();
-  const n = splitPlan(target, mn, mx).length;
+  const byPause = $('#chkPause').checked;
+  const n = splitPlan(target, mn, mx, byPause).length;
   const loss = S.clips.filter(c => c.cues.length || c.out).length;
   let text = 'Получится примерно <b>' + n + '</b> ' +
     (n % 10 === 1 && n % 100 !== 11 ? 'клип' : [2,3,4].indexOf(n % 10) >= 0 && [12,13,14].indexOf(n % 100) < 0 ? 'клипа' : 'клипов') +
-    '. Границы потом можно двигать вручную.';
+    '. ' + (byPause
+      ? (waveData ? 'Границы встанут в паузах речи (найдено ' + waveData.pauses.length + ').'
+                  : 'Звук ещё разбирается — пока границы будут по времени.')
+      : 'Границы встанут строго по времени.') +
+    ' Их потом можно двигать вручную.';
   if (loss){
     text += ' <span style="color:var(--warn)">Внимание: текущие клипы будут заменены, ' +
       'а сделанные субтитры и уже отрендеренные файлы (' + loss + ') потеряются.</span>';
@@ -1052,9 +1284,9 @@ $('#btnSplitGo').addEventListener('click', () => {
   if (S.busy){ banner('busy','warn','Дождитесь окончания текущей операции.'); return; }
   if (!S.duration) return;
   const { target, mn, mx } = splitParams();
-  const parts = splitPlan(target, mn, mx);
+  const parts = splitPlan(target, mn, mx, $('#chkPause').checked);
   if (!parts.length) return;
-  dropClips();
+  pushUndo('нарезка');
   S.clips = parts.map(([a, b]) => makeClip(a, b));
   S.active = 0;
   $('#splitBox').classList.remove('on');
@@ -1191,7 +1423,12 @@ $('#btnAddCue').addEventListener('click', () => {
   const rows = $$('.cue', cuesEl);
   if (rows.length) rows[rows.length - 1].scrollIntoView({ block: 'nearest' });
 });
-$('#btnClearCues').addEventListener('click', () => { S.cues = []; renderCues(); drawPreview(); });
+$('#btnClearCues').addEventListener('click', () => {
+  if (!S.cues.length) return;
+  pushUndo();
+  S.cues = [];
+  renderCues(); renderClips(); drawPreview();
+});
 
 /* --------------------------- аудиограф (один раз) ------------------------ */
 let AG = null;
@@ -2432,6 +2669,116 @@ async function doExport(){
   }
 }
 
+/* --------------------------- пресеты стиля ------------------------------- */
+const PRESETS = {
+  tiktok:  { size: 7.5, pos: 76, color: '#ffffff', active: '#ffd400', box: false, upper: true },
+  youtube: { size: 6.0, pos: 82, color: '#ffffff', active: '#ffd400', box: true,  upper: false },
+  minimal: { size: 5.0, pos: 86, color: '#ffffff', active: '#ffffff', box: false, upper: false },
+  neon:    { size: 7.0, pos: 74, color: '#ffffff', active: '#22d3ee', box: true,  upper: true }
+};
+$$('#presets button').forEach(b => b.addEventListener('click', () => {
+  const p = PRESETS[b.dataset.p];
+  if (!p) return;
+  Object.assign(S.style, p);
+  $('#stSize').value = String(p.size);
+  $('#stPos').value = String(p.pos);
+  $('#stColor').value = p.color;
+  $('#stActive').value = p.active;
+  $('#stBox').checked = p.box;
+  $('#stUpper').checked = p.upper;
+  $('#stSizeVal').textContent = p.size + '%';
+  $('#stPosVal').textContent = p.pos + '%';
+  drawPreview();
+}));
+
+/* ------------------- перетаскивание границ на таймлайне ------------------- */
+let gripDrag = null;
+function placeGrips(){
+  const d = S.duration;
+  const on = d > 0 && S.clips.length;
+  ['#gripL', '#gripR'].forEach(id => $(id).classList.toggle('on', !!on));
+  if (!on) return;
+  $('#gripL').style.left = (S.start / d * 100) + '%';
+  $('#gripR').style.left = (S.end / d * 100) + '%';
+}
+['#gripL', '#gripR'].forEach(id => {
+  const el = $(id);
+  el.addEventListener('pointerdown', e => {
+    if (!S.duration) return;
+    e.stopPropagation();
+    gripDrag = id === '#gripL' ? 'a' : 'b';
+    el.classList.add('drag');
+    el.setPointerCapture(e.pointerId);
+    pushUndo();
+  });
+  el.addEventListener('pointermove', e => {
+    if (!gripDrag) return;
+    e.stopPropagation();
+    const r = tlEl.getBoundingClientRect();
+    const t = clamp((e.clientX - r.left) / r.width, 0, 1) * S.duration;
+    if (gripDrag === 'a') setTrim(t, S.end);
+    else setTrim(S.start, t);
+    placeGrips();
+    drawPreview();
+  });
+  const end = e => {
+    if (!gripDrag) return;
+    gripDrag = null;
+    el.classList.remove('drag');
+    try { el.releasePointerCapture(e.pointerId); } catch(err){}
+  };
+  el.addEventListener('pointerup', end);
+  el.addEventListener('pointercancel', end);
+});
+
+/* ---------------------------- горячие клавиши ---------------------------- */
+function typing(){
+  const a = document.activeElement;
+  return a && (a.tagName === 'INPUT' || a.tagName === 'TEXTAREA' || a.tagName === 'SELECT'
+               || a.isContentEditable);
+}
+document.addEventListener('keydown', e => {
+  if (typing()) return;
+  const ctrl = e.ctrlKey || e.metaKey;
+  if (ctrl && e.key.toLowerCase() === 'z' && !e.shiftKey){ e.preventDefault(); undo(); return; }
+  if (ctrl && (e.key.toLowerCase() === 'y' || (e.key.toLowerCase() === 'z' && e.shiftKey))){
+    e.preventDefault(); redo(); return;
+  }
+  if (ctrl) return;
+  if (!S.hasVideoTrack) return;
+  const step = e.shiftKey ? 1 : 1 / 30;
+
+  switch (e.key){
+    case ' ': case 'k': case 'K': case 'л': case 'Л':
+      e.preventDefault(); $('#btnPlay').click(); break;
+    case 'ArrowLeft':  e.preventDefault(); seekTo(video.currentTime - step); break;
+    case 'ArrowRight': e.preventDefault(); seekTo(video.currentTime + step); break;
+    case 'j': case 'J': case 'о': case 'О':
+      e.preventDefault(); seekTo(video.currentTime - 5); break;
+    case 'l': case 'L': case 'д': case 'Д':
+      e.preventDefault(); seekTo(video.currentTime + 5); break;
+    case 'i': case 'I': case 'ш': case 'Ш':
+      e.preventDefault(); $('#btnSetStart').click(); break;
+    case 'o': case 'O': case 'щ': case 'Щ':
+      e.preventDefault(); $('#btnSetEnd').click(); break;
+    case 'n': case 'N': case 'т': case 'Т':
+      e.preventDefault(); $('#btnAddClip').click(); break;
+    case 'c': case 'C': case 'с': case 'С':
+      e.preventDefault(); $('#btnClip').click(); break;
+    case 'Delete': case 'Backspace': {
+      e.preventDefault();
+      if (S.busy || S.clips.length <= 1) break;
+      pushUndo();
+      S.clips.splice(S.active, 1);
+      S.active = clamp(S.active, 0, S.clips.length - 1);
+      syncClipUi();
+      break;
+    }
+    default:
+      if (/^[1-9]$/.test(e.key)){ e.preventDefault(); selectClip(+e.key - 1); }
+  }
+}, { passive: false });
+
 /* --------------------------- служебное / тесты ---------------------------- */
 window.__SVM = {
   state: S,
@@ -2441,6 +2788,12 @@ window.__SVM = {
   setTrim, groupWords, chunksToWords, captureSegmentAudio, resampleTo16k,
   outSize, cropRect, renderCues, asrDiag, isGpuError, transcribe,
   selectClip, splitPlan, zipStore, crc32, syncClipUi,
+  undo, redo, pushUndo, findPauses, analyzeWholeVideo, drawWave,
+  wave(){ return waveData ? { pauses: waveData.pauses.length, hz: waveData.hz,
+                              floor: +waveData.floor.toFixed(5),
+                              speech: +waveData.speech.toFixed(5),
+                              frames: waveData.env.length } : null; },
+  undoDepth(){ return { undo: undoStack.length, redo: redoStack.length }; },
   analyzeAudio, levelBetween, classifySound, cleanWords, dropJunkCues,
   addSoundCues, nonSpeechTag, isJunk, segmentAudio, decodeWholeAudio, sliceMono,
   clips(){ return S.clips.map((c, i) => ({
@@ -2457,6 +2810,9 @@ $('#panBox').style.display = '';
 updatePanLabel();
 renderCues();
 renderClips();
+refreshUndoUi();
+$('#chkPause').addEventListener('change', updateSplitHint);
+addEventListener('resize', () => { resizePreview(); drawWave(); drawPreview(); });
 drawFrame(pctx, preview.width, preview.height, 0);
 
 if (!window.MediaRecorder){
