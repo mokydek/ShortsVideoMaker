@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+venv/
+.venv/
+env/
+
+# Ключи и токены — ни в коем случае не в репозиторий
+client_secret.json
+youtube_token.json
+tiktok_secret.json
+*_token.json
+
+# Результаты работы конвейера
+clips/
+*.transcript.*.json
+*.16k.wav
+uploaded.json
+tiktok_uploaded.json
+
+# Видео
+*.mp4
+*.webm
+*.mkv
+*.mov
+*.avi
+
+# Системное
+.DS_Store
+Thumbs.db
