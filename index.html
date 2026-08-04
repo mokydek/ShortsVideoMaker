@@ -2575,7 +2575,7 @@ async function doExport(){
       };
       const done = () => exportAbort || video.ended
         || video.currentTime >= S.end - 0.005 || performance.now() - t0 > limit;
-      const watch = setInterval(() => { if (done()) stop(); }, 20);
+      const watch = setInterval(() => { if (done()) stop(); }, 10);
       const tick = () => {
         const now = performance.now();
         diag.maxGap = Math.max(diag.maxGap, now - lastTick);
