@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import sys
 import threading
@@ -45,8 +46,31 @@ from svm_common import (
     warn,
 )
 
-TRANSCRIPT_VERSION = 2
+TRANSCRIPT_VERSION = 3
 PUNCT_END = ".!?…:;"
+ENV_HZ = 20                       # частота огибающей громкости, кадров в секунду
+
+# Фразы, которые whisper дописывает на тишине и под музыку — это хвосты
+# ютубовских титров из обучающих данных. Выкидываем их только там, где звука
+# почти нет: в нормальной речи такое вполне могли сказать.
+JUNK_RE = [
+    re.compile(p, re.IGNORECASE) for p in (
+        r"^продолжение следует", r"^субтитры (сделал|создавал|подготовил)",
+        r"^редактор субтитров", r"^корректор", r"^спасибо за просмотр",
+        r"^подписывайтесь на канал", r"^ставьте лайк", r"^до новых встреч",
+        r"^thanks? (you )?for watching", r"^subscribe", r"^please subscribe",
+        r"^like and subscribe", r"^see you next time", r"^bye[.!]?$", r"^you$",
+        r"^\.+$", r"^…+$",
+    )
+]
+
+# Пометки нечитаемых звуков, которые иногда выдаёт сама модель.
+SOUND_MAP = (
+    (re.compile(r"(смех|смеётся|смеется|хохот|laugh|chuckl|giggl)", re.I), "СМЕХ"),
+    (re.compile(r"(аплодис|хлопа|applau|clapping)", re.I), "АПЛОДИСМЕНТЫ"),
+    (re.compile(r"(музыка|music|песня|singing)", re.I), "МУЗЫКА"),
+    (re.compile(r"(кашел|кашля|cough)", re.I), "КАШЕЛЬ"),
+)
 
 
 # =========================================================== разбор аргументов
@@ -75,6 +99,8 @@ def parse_args(argv=None) -> argparse.Namespace:
                    help="на чём распознавать речь (по умолчанию auto: CUDA, если есть)")
     p.add_argument("--no-label", action="store_true", help="не рисовать надпись «Часть N»")
     p.add_argument("--no-subs", action="store_true", help="не вшивать субтитры")
+    p.add_argument("--no-sound-tags", action="store_true",
+                   help="не подписывать [СМЕХ] и [МУЗЫКА] в паузах")
     p.add_argument("--force", action="store_true", help="перерисовать уже готовые части")
     p.add_argument("--force-subs", action="store_true",
                    help="перегенерировать .ass, затерев ручные правки")
@@ -155,6 +181,98 @@ def _is_cuda_error(exc: Exception) -> bool:
                 "cannot be loaded", "out of memory"))
 
 
+def audio_envelope(wav: Path, hz: int = ENV_HZ) -> list[int]:
+    """Громкость по кадрам 1/hz секунды, целыми числами 0..10000.
+
+    Нужна дважды: чтобы отличить придуманный текст поверх тишины от настоящей
+    речи и чтобы найти паузы, где звук есть, а слов нет. Хранится в кеше
+    транскрипта, поэтому повторный запуск не считает её заново.
+    """
+    try:
+        import wave
+
+        import numpy as np
+
+        with wave.open(str(wav), "rb") as fh:
+            sr = fh.getframerate() or 16000
+            raw = fh.readframes(fh.getnframes())
+        data = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
+        frame = max(1, sr // hz)
+        cnt = len(data) // frame
+        if cnt < 1:
+            return []
+        rms = np.sqrt((data[: cnt * frame].reshape(cnt, frame) ** 2).mean(axis=1))
+        return np.clip(rms * 10000.0, 0, 10000).astype(np.int32).tolist()
+    except Exception as exc:                                   # noqa: BLE001
+        warn(f"не смог посчитать громкость ({exc}) — отсев выдумок и пометки "
+             "звуков работать не будут.")
+        return []
+
+
+class Loudness:
+    """Обёртка над огибающей: уровни фона, речи и громкость на отрезке."""
+
+    def __init__(self, env: list[int], hz: int = ENV_HZ):
+        self.env = env or []
+        self.hz = hz or ENV_HZ
+        vals = sorted(self.env)
+        pick = lambda q: (vals[min(len(vals) - 1, max(0, int(len(vals) * q)))] / 10000.0
+                          if vals else 0.0)
+        self.floor = pick(0.10)
+        self.speech = pick(0.85)
+
+    @property
+    def ok(self) -> bool:
+        return len(self.env) > 4
+
+    def slice(self, a: float, b: float) -> list[float]:
+        i0 = max(0, int(a * self.hz))
+        i1 = min(len(self.env), max(i0 + 1, int(b * self.hz) + 1))
+        return [v / 10000.0 for v in self.env[i0:i1]]
+
+    def level(self, a: float, b: float) -> float:
+        s = self.slice(a, b)
+        return sum(s) / len(s) if s else 0.0
+
+    def classify(self, a: float, b: float) -> str | None:
+        """Смех — рваная громкость, музыка — ровная, тишина — ничего."""
+        seg = self.slice(a, b)
+        if len(seg) < 10:
+            return None
+        mean = sum(seg) / len(seg)
+        hi, lo = max(seg), min(seg)
+        loud = self.floor + 0.30 * max(1e-6, self.speech - self.floor)
+        if mean < loud and mean < 0.035:
+            return None
+        up, down = mean * 1.15, mean * 0.85
+        bursts, above = 0, False
+        for v in seg:
+            if not above and v > up:
+                above, bursts = True, bursts + 1
+            elif above and v < down:
+                above = False
+        per_sec = bursts / max(0.2, b - a)
+        depth = (hi - lo) / hi if hi > 0 else 0.0
+        if 2.2 <= per_sec <= 9 and depth > 0.5:
+            return "СМЕХ"
+        return "МУЗЫКА" if mean > 0.05 else None
+
+
+def sound_tag(text: str) -> str | None:
+    t = str(text).strip()
+    if t and all(ch in "♪♫ " for ch in t):
+        return "МУЗЫКА"
+    for rx, name in SOUND_MAP:
+        if rx.search(t.strip("()[]*")):
+            return name
+    return None
+
+
+def is_junk(text: str) -> bool:
+    t = str(text).strip()
+    return any(rx.match(t) for rx in JUNK_RE)
+
+
 def _wav_seconds(wav: Path) -> float:
     try:
         import wave
@@ -187,7 +305,15 @@ def _asr_pass(wav: Path, model_name: str, lang: str, device: str, compute: str,
     words: list[dict] = []
     seg_list: list[dict] = []
     last_print = 0.0
+    skipped = 0
     for seg in segments:
+        # Модель сама сообщает, насколько уверена. Куски, где она почти уверена,
+        # что речи нет, а текст всё равно выдала, — это выдумка, и её лучше не брать.
+        no_speech = float(getattr(seg, "no_speech_prob", 0.0) or 0.0)
+        logprob = float(getattr(seg, "avg_logprob", 0.0) or 0.0)
+        if no_speech > 0.65 and logprob < -0.8:
+            skipped += 1
+            continue
         seg_list.append({"s": round(seg.start, 3), "e": round(seg.end, 3),
                          "text": (seg.text or "").strip()})
         for w in (seg.words or []):
@@ -202,6 +328,8 @@ def _asr_pass(wav: Path, model_name: str, lang: str, device: str, compute: str,
                      f"{human_time(seg.end)} / {human_time(total)}")
     if total:
         progress(total, total, "распознавание ", f"{human_time(total)} / {human_time(total)}")
+    if skipped:
+        info(f"отброшено кусков без речи: {skipped}")
     return words, seg_list, detected
 
 
@@ -272,6 +400,8 @@ def transcribe(wav: Path, video: Path, model_name: str, lang: str,
         "source": source,
         "words": words,
         "segments": seg_list,
+        "env_hz": ENV_HZ,
+        "envelope": audio_envelope(wav),
     }
 
 
@@ -326,19 +456,74 @@ def group_words(words: list[dict], max_words: int, gap: float) -> list[list[dict
     cues: list[list[dict]] = []
     cur: list[dict] = []
     for i, w in enumerate(words):
-        cur.append(w)
         nxt = words[i + 1] if i + 1 < len(words) else None
+        # пометки вроде [СМЕХ] держим отдельной репликой
+        if w.get("sound") or (w["w"].startswith("[") and w["w"].endswith("]")):
+            if cur:
+                cues.append(cur)
+                cur = []
+            cues.append([w])
+            continue
+        cur.append(w)
         text = w["w"].strip()
         ends_sentence = bool(text) and text[-1] in PUNCT_END
         pause = (float(nxt["s"]) - float(w["e"])) if nxt else 1e9
         too_long = sum(len(x["w"]) for x in cur) > 26
-        if (nxt is None or len(cur) >= max_words or too_long
+        next_is_sound = bool(nxt) and (nxt.get("sound")
+                                       or (nxt["w"].startswith("[") and nxt["w"].endswith("]")))
+        if (nxt is None or next_is_sound or len(cur) >= max_words or too_long
                 or (ends_sentence and len(cur) >= 2) or pause > gap):
             cues.append(cur)
             cur = []
     if cur:
         cues.append(cur)
     return cues
+
+
+def drop_junk_cues(cues: list[list[dict]], loud: "Loudness", offset: float) -> list[list[dict]]:
+    """Убираем выдумки на тишине и зацикленные повторы."""
+    quiet = loud.floor + 0.35 * max(1e-6, loud.speech - loud.floor)
+    kept: list[list[dict]] = []
+    for cue in cues:
+        text = " ".join(w["w"] for w in cue).strip()
+        level = loud.level(offset + cue[0]["s"], offset + cue[-1]["e"])
+        if is_junk(text) and level < quiet:
+            continue
+        if kept:
+            prev = " ".join(w["w"] for w in kept[-1]).strip()
+            if prev.lower() == text.lower() and cue[0]["s"] - kept[-1][-1]["e"] < 0.35:
+                continue
+        kept.append(cue)
+    return kept
+
+
+def add_sound_cues(cues: list[list[dict]], loud: "Loudness",
+                   start: float, end: float) -> list[list[dict]]:
+    """В паузах, где звук есть, а слов нет, ставим [СМЕХ] или [МУЗЫКА]."""
+    MIN_GAP = 0.7
+    dur = end - start
+    gaps: list[tuple[float, float]] = []
+    pos = 0.0
+    for cue in cues:
+        if cue[0]["s"] - pos >= MIN_GAP:
+            gaps.append((pos, cue[0]["s"]))
+        pos = max(pos, cue[-1]["e"])
+    if dur - pos >= MIN_GAP:
+        gaps.append((pos, dur))
+
+    extra: list[list[dict]] = []
+    for a, b in gaps:
+        kind = loud.classify(start + a, start + b)
+        if not kind:
+            continue
+        s2 = a + 0.05
+        e2 = min(b - 0.05, s2 + 2.5)
+        if e2 - s2 < 0.4:
+            continue
+        extra.append([{"w": f"[{kind}]", "s": s2, "e": e2, "sound": True}])
+    out = cues + extra
+    out.sort(key=lambda c: c[0]["s"])
+    return out
 
 
 # ================================================================= ASS =======
@@ -627,6 +812,13 @@ def main(argv=None) -> int:
     # -------------------------------------------------- 4. субтитры .ass ---
     stage("Готовлю субтитры")
     ass_files: dict[int, str] = {}
+    loud = Loudness(data.get("envelope") or [], int(data.get("env_hz") or ENV_HZ))
+    sound_tags = bool(cfg["subtitles"].get("sound_tags", True)) and not args.no_sound_tags
+    drop_junk = bool(cfg["subtitles"].get("drop_hallucinations", True))
+    dropped_words = tagged = 0
+    if not loud.ok and (sound_tags or drop_junk):
+        warn("громкость не посчитана (старый кеш транскрипта) — отсев выдумок и "
+             "пометки звуков пропускаю. Пересчитать: --force-transcribe")
     if args.no_subs:
         info("субтитры отключены флагом --no-subs")
     else:
@@ -641,13 +833,28 @@ def main(argv=None) -> int:
                 kept += 1
                 continue
             inside = [w for w in words if float(w["s"]) >= s - 0.05 and float(w["s"]) < e]
-            rel = [{"w": w["w"], "s": float(w["s"]) - s, "e": min(float(w["e"]), e) - s}
-                   for w in inside]
-            rel = [w for w in rel if w["e"] > w["s"]]
-            if not rel:
-                continue
+            rel = []
+            for w in inside:
+                a2, b2 = float(w["s"]) - s, min(float(w["e"]), e) - s
+                if b2 <= a2:
+                    continue
+                # слово поверх тишины — почти наверняка выдумка модели
+                if drop_junk and loud.ok and loud.level(float(w["s"]), float(w["e"])) <= loud.floor * 1.6:
+                    dropped_words += 1
+                    continue
+                tag = sound_tag(w["w"])
+                rel.append({"w": f"[{tag}]" if tag else w["w"], "s": a2, "e": b2,
+                            "sound": bool(tag)})
             cues = group_words(rel, int(cfg["subtitles"]["words_per_cue"]),
                                float(cfg["subtitles"]["cue_gap"]))
+            if drop_junk and loud.ok:
+                cues = drop_junk_cues(cues, loud, s)
+            if sound_tags and loud.ok:
+                before = len(cues)
+                cues = add_sound_cues(cues, loud, s, e)
+                tagged += len(cues) - before
+            if not cues:
+                continue
             path.write_text(build_ass(cues, cfg), encoding="utf-8")
             ass_files[idx] = name
             made += 1
@@ -656,6 +863,10 @@ def main(argv=None) -> int:
                  "(--force-subs, чтобы перегенерировать)")
         info(f"файлов .ass: {len(ass_files)} из {len(parts)}"
              + ("" if words else " — распознанной речи нет"))
+        if dropped_words:
+            info(f"выброшено слов, придуманных поверх тишины: {dropped_words}")
+        if tagged:
+            info(f"добавлено пометок звука ([СМЕХ] / [МУЗЫКА]): {tagged}")
 
     # ------------------------------------------------------- 5. рендер -----
     stage("Рендерю клипы")

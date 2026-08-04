@@ -318,13 +318,14 @@ footer a{color:var(--acc)}
         <div>
           <label class="f" for="selSpeed">Снятие звука</label>
           <select id="selSpeed">
-            <option value="1">1× (надёжно)</option>
-            <option value="2" selected>2× (быстрее)</option>
-            <option value="4">4× (максимум)</option>
+            <option value="1">1× — надёжнее всего</option>
+            <option value="2" selected>2× — вдвое быстрее</option>
+            <option value="4">4× — на слабых ПК рвётся</option>
           </select>
         </div>
       </div>
-      <label class="chk" style="margin-top:10px"><input type="checkbox" id="chkGpu"> Ускорение WebGPU <span class="hint" style="margin:0" id="gpuNote"></span></label>
+      <label class="chk" style="margin-top:10px"><input type="checkbox" id="chkSounds" checked> Помечать смех и музыку — <span class="hint" style="margin:0">в паузах, где звук есть, а слов нет, появится <b>[СМЕХ]</b> или <b>[МУЗЫКА]</b></span></label>
+      <label class="chk" style="margin-top:8px"><input type="checkbox" id="chkGpu"> Ускорение WebGPU <span class="hint" style="margin:0" id="gpuNote"></span></label>
       <div class="row" style="margin-top:11px">
         <button id="btnAsr" class="primary">✨ Распознать в этом клипе</button>
         <button id="btnAsrAll">✨ Во всех клипах</button>
@@ -656,6 +657,7 @@ function resizePreview(){
   if (w > maxW){ w = maxW; h = w * r.sh / r.sw; }
   preview.width  = Math.round(w);
   preview.height = Math.round(h);
+  previewDrawn = false;                       // смена размера очищает холст
 }
 
 /* ------------------------------- отрисовка ------------------------------- */
@@ -753,8 +755,13 @@ function drawSubtitles(ctx, W, H, t){
   ctx.restore();
 }
 
+/* Пока идёт перемотка, кадра у видео нет. Не перерисовываем — иначе
+   предпросмотр мигает чёрным на каждом движении ползунка. */
+let previewDrawn = false;
 function drawPreview(){
+  if (video.readyState < 2 && previewDrawn) return;
   drawFrame(pctx, preview.width, preview.height, video.currentTime - S.start);
+  if (video.readyState >= 2) previewDrawn = true;
 }
 
 /* ------------------------------ главный цикл ----------------------------- */
@@ -1288,6 +1295,66 @@ async function makeCapture(actx, onChunk){
   };
 }
 
+/* Съём звука без воспроизведения: файл декодируется целиком в 16 кГц через
+   OfflineAudioContext, дальше просто вырезается нужный кусок. Это мгновенно и,
+   главное, ничего не теряет — тогда как захват в реальном времени на
+   загруженной машине роняет куски звука, и распознавание начинает врать.
+   Работает не всегда: у больших файлов не хватит памяти, а экзотический
+   контейнер браузер может не разобрать — на этот случай остаётся захват. */
+const DECODE_MAX_BYTES = 300 * 1024 * 1024;
+const DECODE_MAX_DUR = 40 * 60;
+let decodedAudio = null;                      // { key, buf }
+
+async function decodeWholeAudio(onProgress){
+  if (!S.file) return null;
+  if (S.file.size > DECODE_MAX_BYTES || S.duration > DECODE_MAX_DUR){
+    asrDiag.decode = 'файл слишком большой для разбора целиком';
+    return null;
+  }
+  const key = S.file.name + '|' + S.file.size;
+  if (decodedAudio && decodedAudio.key === key) return decodedAudio.buf;
+  const OC = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+  if (!OC){ asrDiag.decode = 'OfflineAudioContext недоступен'; return null; }
+  try {
+    onProgress && onProgress(0.15);
+    const ab = await S.file.arrayBuffer();
+    onProgress && onProgress(0.45);
+    const oc = new OC(1, 1, SR);              // декодирует сразу в 16 кГц
+    const buf = await oc.decodeAudioData(ab);
+    decodedAudio = { key, buf };
+    asrDiag.decode = 'ok';
+    return buf;
+  } catch(err){
+    asrDiag.decode = String(err && err.message || err);
+    return null;
+  }
+}
+
+function sliceMono(buf, a, b){
+  const sr = buf.sampleRate || SR;
+  const i0 = clamp(Math.floor(a * sr), 0, buf.length);
+  const i1 = clamp(Math.ceil(b * sr), i0 + 1, buf.length);
+  const n = i1 - i0;
+  const out = new Float32Array(n);
+  const ch = Math.max(1, buf.numberOfChannels);
+  for (let c = 0; c < ch; c++){
+    const d = buf.getChannelData(c);
+    for (let i = 0; i < n; i++) out[i] += d[i0 + i] / ch;
+  }
+  return out;
+}
+
+async function segmentAudio(onProgress){
+  const buf = await decodeWholeAudio(onProgress);
+  if (buf){
+    onProgress && onProgress(1);
+    const mono = sliceMono(buf, S.start, S.end);
+    const sr = buf.sampleRate || SR;
+    return { audio: sr === SR ? mono : await resampleTo16k(mono, sr), fast: true };
+  }
+  return { audio: await captureSegmentAudio(onProgress), fast: false };
+}
+
 async function captureSegmentAudio(onProgress){
   const g = audioGraph();
   await g.actx.resume().catch(() => {});
@@ -1527,12 +1594,52 @@ async function asrActiveClip(prefix){
 
   try {
     // 1. звук
-    setAsrStatus(prefix + 'Снимаю звук отрывка…');
-    const audio = await captureSegmentAudio(p => {
+    const report = p => {
       setAsrProg(p * 0.3);
-      setAsrStatus(prefix + 'Снимаю звук отрывка… ' + Math.round(p * 100) + '%');
-    });
+      setAsrStatus(prefix + 'Готовлю звук отрывка… ' + Math.round(p * 100) + '%');
+    };
+    setAsrStatus(prefix + 'Готовлю звук отрывка…');
+    let got = await segmentAudio(report);
     if (asrAbort) throw new Error('Отменено');
+    let audio = got.audio;
+    let st = analyzeAudio(audio);
+
+    /* Захват в реальном времени на загруженной машине теряет куски звука, а на
+       дырявой дорожке распознавание либо врёт, либо молчит. Если это случилось,
+       сначала пробуем разобрать файл целиком, а уже потом снижаем скорость. */
+    const speedSel = $('#selSpeed');
+    if (!got.fast && st.silentPct > 12){
+      const lower = parseFloat(speedSel.value) >= 4 ? '2' : '1';
+      const canLower = parseFloat(speedSel.value) > 1;
+      banner('speed','warn',
+        '<b>Звук снялся с провалами</b> (' + st.silentPct.toFixed(0) + '% пустых кусков). ' +
+        'Разобрать файл целиком не вышло' +
+        (asrDiag.decode ? ' (' + esc(String(asrDiag.decode)) + ')' : '') + ', ' +
+        (canLower
+          ? 'поэтому переснимаю на ' + lower + '× — «Снятие звука» переключено, чтобы не повторялось.'
+          : 'а скорость уже минимальная. Закройте лишние программы и попробуйте ещё раз.'));
+      if (canLower){
+        setAsrStatus(prefix + 'Звук снялся с провалами — переснимаю на ' + lower + '×…');
+        speedSel.value = lower;
+        got = await segmentAudio(report);
+        if (asrAbort) throw new Error('Отменено');
+        audio = got.audio;
+        st = analyzeAudio(audio);
+      }
+    }
+    asrDiag.fastAudio = !!got.fast;
+    asrDiag.audio = { rms: +st.rms.toFixed(5), floor: +st.floor.toFixed(5),
+                      speech: +st.speech.toFixed(5), silentPct: +st.silentPct.toFixed(1) };
+
+    if (st.speech < 0.004){
+      banner('asr','warn',
+        '<b>В этом отрывке почти нет звука.</b> Проверьте, что в видео есть звуковая ' +
+        'дорожка и что вы слышите её кнопкой «▶ Играть». Субтитры можно вписать вручную — ' +
+        '«＋ Добавить строку» в разделе «Субтитры».');
+      setAsrStatus(prefix + 'Тишина — распознавать нечего.');
+      setAsrProg(null);
+      return { ok: true, cues: 0 };
+    }
 
     // 2. модель
     setAsrStatus(prefix + 'Загружаю модель распознавания…');
@@ -1568,21 +1675,36 @@ async function asrActiveClip(prefix){
     if (asrAbort) throw new Error('Отменено');
     const out = res.out, wordLevel = res.wordLevel;
 
-    const words = chunksToWords(out, wordLevel, Math.max(S.end - S.start, audio.length / 16000));
-    if (!words.length){
+    const clipDur = Math.max(S.end - S.start, audio.length / SR);
+    const raw = chunksToWords(out, wordLevel, clipDur);
+    const words = cleanWords(raw, st);
+    const dropped = raw.length - words.length;
+
+    let cues = dropJunkCues(groupWords(words), st);
+    const tagsOn = $('#chkSounds').checked;
+    if (tagsOn) cues = addSoundCues(cues, st, clipDur);
+    const sounds = cues.filter(c => c.sound || /^\[.+\]$/.test(c.words[0] && c.words[0].text || '')).length;
+
+    if (!cues.length){
       if (!prefix){
-        banner('asr','info','<b>Речь не распознана.</b> Возможно, в отрывке нет разборчивого голоса. Попробуйте модель точнее (small), задайте язык явно или впишите субтитры вручную.');
+        banner('asr','info','<b>Речь не распознана.</b> В отрывке звук есть, но разборчивого голоса не нашлось — ' +
+          'возможно, это музыка или шум. Попробуйте модель точнее (small), задайте язык явно ' +
+          'или впишите субтитры вручную.');
       }
       setAsrStatus(prefix + 'Готово: реплик не найдено.');
+      setAsrProg(null);
       return { ok: true, cues: 0 };
     }
-    S.cues = groupWords(words);
+
+    S.cues = cues;
     renderCues();
     renderClips();
-    setAsrStatus(prefix + 'Готово: ' + S.cues.length + ' реплик' +
+    setAsrStatus(prefix + 'Готово: ' + cues.length + ' реплик' +
+      (sounds ? ', из них пометок звука ' + sounds : '') +
+      (dropped ? ', отброшено пустых ' + dropped : '') +
       (wordLevel ? ' (пословные тайминги)' : ' (посегментные тайминги)'));
     setAsrProg(1);
-    return { ok: true, cues: S.cues.length };
+    return { ok: true, cues: cues.length };
 
   } catch(err){
     setAsrProg(null);
@@ -1648,6 +1770,153 @@ async function runAsr(indices){
 $('#btnAsr').addEventListener('click', () => runAsr(S.clips.length ? [S.active] : []));
 $('#btnAsrAll').addEventListener('click', () => runAsr(S.clips.map((_, i) => i)));
 
+/* ======================= разбор снятого звука ============================
+   Одна и та же огибающая громкости решает две задачи: отсекает выдуманные
+   реплики (whisper любит «дописывать» текст поверх тишины) и находит места,
+   где звук есть, а слов нет — смех, музыку, аплодисменты.               */
+const SR = 16000;
+
+function analyzeAudio(audio){
+  const frame = Math.round(SR * 0.02);              // 20 мс
+  const n = Math.max(1, Math.floor(audio.length / frame));
+  const env = new Float32Array(n);
+  for (let i = 0; i < n; i++){
+    let s = 0;
+    for (let j = 0; j < frame; j++){ const v = audio[i * frame + j] || 0; s += v * v; }
+    env[i] = Math.sqrt(s / frame);
+  }
+  const sorted = Array.from(env).sort((a, b) => a - b);
+  const pick = q => sorted[clamp(Math.floor(sorted.length * q), 0, sorted.length - 1)] || 0;
+  const floor = pick(0.10);                          // фон
+  const speech = pick(0.85);                         // громкие места
+
+  /* Выпадения звука ищем по целым пустым кадрам, а не по отдельным сэмплам:
+     около нуля сэмплы проходят у любого сигнала — на каждом переходе через
+     ноль, — и по ним провал не отличить от нормального звука. А вот целые
+     20 мс цифровой тишины посреди громкого места бывают только при обрыве. */
+  let dead = 0;
+  for (let i = 0; i < n; i++) if (env[i] < 1e-5) dead++;
+  return { env, frame, floor, speech, dur: audio.length / SR,
+           silentPct: n ? dead / n * 100 : 100,
+           rms: pick(0.5) };
+}
+
+function levelBetween(st, a, b){
+  const i0 = clamp(Math.floor(a * SR / st.frame), 0, st.env.length - 1);
+  const i1 = clamp(Math.ceil(b * SR / st.frame), i0 + 1, st.env.length);
+  let s = 0;
+  for (let i = i0; i < i1; i++) s += st.env[i];
+  return s / Math.max(1, i1 - i0);
+}
+
+/* Фразы, которые whisper выдумывает на тишине и музыке — это хвосты от
+   ютубовских титров в обучающих данных. Убираем их только там, где звука
+   почти нет: в осмысленной речи такое сказать вполне могли.            */
+const JUNK = [
+  /^продолжение следует/i, /^субтитры (сделал|создавал|подготовил)/i,
+  /^редактор субтитров/i, /^корректор/i, /^спасибо за просмотр/i,
+  /^подписывайтесь на канал/i, /^ставьте лайк/i, /^до новых встреч/i,
+  /^thank(s| you) for watching/i, /^subscribe/i, /^please subscribe/i,
+  /^like and subscribe/i, /^see you next time/i, /^bye[.!]?$/i, /^you$/i,
+  /^\.+$/, /^…+$/
+];
+const isJunk = t => JUNK.some(re => re.test(String(t).trim()));
+
+/* Пометки нечитаемых звуков, которые иногда выдаёт сама модель:
+   «(смех)», «(laughs)», «♪» — приводим к одному виду.                  */
+function nonSpeechTag(text){
+  const t = String(text).trim().toLowerCase().replace(/[()[\]*]/g, '').trim();
+  if (/^[♪♫\s]+$/.test(String(text).trim())) return 'МУЗЫКА';
+  if (/(смех|смеётся|смеется|хохот|laugh|chuckl|giggl)/.test(t)) return 'СМЕХ';
+  if (/(аплодис|хлопа|applau|clapping)/.test(t)) return 'АПЛОДИСМЕНТЫ';
+  if (/(музыка|music|песня|singing)/.test(t)) return 'МУЗЫКА';
+  if (/(кашел|кашля|cough)/.test(t)) return 'КАШЕЛЬ';
+  return null;
+}
+
+/* Смех от музыки отличается «рваной» громкостью: несколько всплесков в
+   секунду с большой глубиной. Ровный звук — скорее музыка или шум.     */
+function classifySound(st, a, b){
+  const i0 = clamp(Math.floor(a * SR / st.frame), 0, st.env.length - 1);
+  const i1 = clamp(Math.ceil(b * SR / st.frame), i0 + 1, st.env.length);
+  const seg = st.env.subarray(i0, i1);
+  if (seg.length < 10) return null;
+  let sum = 0, max = 0, min = Infinity;
+  for (const v of seg){ sum += v; if (v > max) max = v; if (v < min) min = v; }
+  const mean = sum / seg.length;
+  /* Сравнение с фоном не работает, когда весь кусок — один ровный звук: там
+     фон и «громко» совпадают. Поэтому вторым условием берём абсолютный
+     уровень, ниже которого говорить о звуке просто не о чем. */
+  const loud = st.floor + 0.30 * Math.max(1e-6, st.speech - st.floor);
+  if (mean < loud && mean < 0.035) return null;      // тихо — просто пауза
+
+  const hi = mean * 1.15, lo = mean * 0.85;
+  let bursts = 0, above = false;
+  for (const v of seg){
+    if (!above && v > hi){ above = true; bursts++; }
+    else if (above && v < lo) above = false;
+  }
+  const perSec = bursts / Math.max(0.2, b - a);
+  const depth = max > 0 ? (max - min) / max : 0;
+  if (perSec >= 2.2 && perSec <= 9 && depth > 0.5) return 'СМЕХ';
+  // ровный звук помечаем музыкой только если он и правда громкий: тихий
+  // фоновый шум в паузе подписывать нечестно
+  return mean > 0.05 ? 'МУЗЫКА' : null;
+}
+
+/* Чистка распознанного: выдумки на тишине, зацикленные повторы, пустышки. */
+function cleanWords(words, st){
+  const out = [];
+  for (const w of words){
+    const txt = String(w.text || '').trim();
+    if (!txt) continue;
+    const lvl = levelBetween(st, w.start, w.end);
+    if (lvl <= st.floor * 1.6) continue;             // слово поверх тишины — выдумка
+    const tag = nonSpeechTag(txt);
+    out.push({ ...w, text: tag ? '[' + tag + ']' : txt, level: lvl, sound: !!tag });
+  }
+  return out;
+}
+
+function dropJunkCues(cues, st){
+  const quiet = st.floor + 0.35 * Math.max(1e-6, st.speech - st.floor);
+  const kept = [];
+  for (const c of cues){
+    const text = c.words.map(w => w.text).join(' ').trim();
+    const lvl = levelBetween(st, c.start, c.end);
+    if (isJunk(text) && lvl < quiet) continue;
+    // зацикленный повтор подряд — тоже артефакт
+    const prev = kept[kept.length - 1];
+    if (prev && prev.words.map(w => w.text).join(' ').trim().toLowerCase() === text.toLowerCase()
+        && c.start - prev.end < 0.35) continue;
+    kept.push(c);
+  }
+  return kept;
+}
+
+/* Вставляем пометки там, где звук есть, а слов нет. */
+function addSoundCues(cues, st, dur){
+  const MIN_GAP = 0.7;
+  const gaps = [];
+  let pos = 0;
+  for (const c of cues){
+    if (c.start - pos >= MIN_GAP) gaps.push([pos, c.start]);
+    pos = Math.max(pos, c.end);
+  }
+  if (dur - pos >= MIN_GAP) gaps.push([pos, dur]);
+
+  const extra = [];
+  for (const [a, b] of gaps){
+    const kind = classifySound(st, a, b);
+    if (!kind) continue;
+    const s = a + 0.05, e = Math.min(b - 0.05, s + 2.5);
+    if (e - s < 0.4) continue;
+    extra.push({ start: s, end: e, sound: true,
+                 words: [{ text: '[' + kind + ']', start: s, end: e }] });
+  }
+  return cues.concat(extra).sort((x, y) => x.start - y.start);
+}
+
 /* chunks → плоский список слов с таймингами (в секундах от начала клипа) */
 function chunksToWords(out, wordLevel, dur){
   const words = [];
@@ -1701,11 +1970,20 @@ function groupWords(words, maxWords){
   };
   for (let i = 0; i < words.length; i++){
     const w = words[i], next = words[i + 1];
+    // пометки вроде [СМЕХ] держим отдельной репликой, а не в куче со словами
+    if (w.sound || /^\[.+\]$/.test(w.text)){
+      flush();
+      cur.push(w);
+      flush();
+      continue;
+    }
     cur.push(w);
     const sentenceEnd = /[.!?…:;]$/.test(w.text);
     const gap = next ? next.start - w.end : Infinity;
     const long = cur.reduce((a, x) => a + x.text.length, 0) > 26;
-    if (!next || cur.length >= maxWords || long || (sentenceEnd && cur.length >= 2) || (gap > 0.55 && cur.length >= 1)) flush();
+    const nextIsSound = next && (next.sound || /^\[.+\]$/.test(next.text));
+    if (!next || nextIsSound || cur.length >= maxWords || long
+        || (sentenceEnd && cur.length >= 2) || (gap > 0.55 && cur.length >= 1)) flush();
   }
   // подтягиваем конец реплики до следующей, если пауза крошечная
   for (let i = 0; i < cues.length; i++){
@@ -2100,6 +2378,8 @@ window.__SVM = {
   setTrim, groupWords, chunksToWords, captureSegmentAudio, resampleTo16k,
   outSize, cropRect, renderCues, asrDiag, isGpuError, transcribe,
   selectClip, splitPlan, zipStore, crc32, syncClipUi,
+  analyzeAudio, levelBetween, classifySound, cleanWords, dropJunkCues,
+  addSoundCues, nonSpeechTag, isJunk, segmentAudio, decodeWholeAudio, sliceMono,
   clips(){ return S.clips.map((c, i) => ({
     n: i + 1, start: c.start, end: c.end, dur: +(c.end - c.start).toFixed(3),
     pan: c.pan, cues: c.cues.length, ready: !!c.out,
