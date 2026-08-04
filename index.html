@@ -143,6 +143,38 @@ label.f{display:block;font-size:12px;color:var(--muted);margin:0 0 5px}
 .cue-head{display:grid;grid-template-columns:78px 78px 1fr 30px;gap:7px;padding:6px 8px;font-size:11px;
   color:var(--muted);border-bottom:1px solid var(--line);position:sticky;top:0;background:#15122480;backdrop-filter:blur(6px)}
 
+/* список клипов */
+.tag{margin-left:auto;font-size:11px;font-weight:600;color:var(--acc);background:rgba(167,139,250,.13);
+  border:1px solid rgba(167,139,250,.3);padding:2px 8px;border-radius:999px;letter-spacing:.2px}
+.clips{margin-top:11px;border:1px solid var(--line);border-radius:11px;background:#100e1c;
+  max-height:330px;overflow:auto}
+.clip{display:grid;grid-template-columns:30px 1fr auto;gap:9px;padding:9px 10px;align-items:center;
+  border-bottom:1px solid #221f3a;cursor:pointer;transition:.12s}
+.clip:last-child{border-bottom:0}
+.clip:hover{background:rgba(167,139,250,.06)}
+.clip.on{background:rgba(167,139,250,.13);box-shadow:inset 3px 0 0 var(--acc)}
+.clip .num{font-weight:700;color:var(--muted);font-variant-numeric:tabular-nums;text-align:center}
+.clip.on .num{color:var(--acc)}
+.clip .meta{min-width:0}
+.clip .when{font-size:13px;font-variant-numeric:tabular-nums}
+.clip .sub{font-size:11.5px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:1px}
+.clip .acts{display:flex;gap:3px;align-items:center}
+.clip .acts button,.clip .acts a{background:transparent;border:0;color:var(--muted);padding:5px 6px;
+  border-radius:7px;font-size:13px;line-height:1}
+.clip .acts button:hover,.clip .acts a:hover{background:rgba(255,255,255,.07);color:var(--txt)}
+.clip .acts .del:hover{color:var(--err);background:rgba(251,113,133,.13)}
+.dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:#3a3557;margin-right:6px;
+  vertical-align:middle;flex:0 0 auto}
+.dot.ready{background:var(--ok);box-shadow:0 0 6px rgba(52,211,153,.6)}
+.dot.busy{background:var(--warn);animation:pulse 1s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+.clips-empty{padding:18px;text-align:center;color:var(--muted);font-size:13px}
+.splitbox{display:none;margin-top:11px;padding:12px;border:1px solid var(--line);border-radius:11px;
+  background:rgba(167,139,250,.05)}
+.splitbox.on{display:block}
+.tl-clip{position:absolute;top:0;bottom:0;background:rgba(124,92,245,.2);border-left:1px solid rgba(167,139,250,.5);
+  border-right:1px solid rgba(167,139,250,.5)}
+
 /* segmented */
 .seg{display:flex;background:#100e1c;border:1px solid var(--line);border-radius:10px;padding:3px;gap:3px}
 .seg button{flex:1;background:transparent;border:0;padding:8px 6px;border-radius:8px;font-size:13.5px;color:var(--muted)}
@@ -193,6 +225,7 @@ footer a{color:var(--acc)}
       <div class="stage"><canvas id="preview" width="360" height="640"></canvas></div>
 
       <div class="tl" id="tl">
+        <div id="tlClips"></div>
         <div class="tl-sel" id="tlSel"></div>
         <div class="tl-head" id="tlHead"></div>
         <div class="tl-lab" id="tlLab">видео не выбрано</div>
@@ -212,7 +245,30 @@ footer a{color:var(--acc)}
 
     <!-- ШАГ 2 -->
     <section class="card">
-      <h2><i>2</i>Отрывок</h2>
+      <h2><i>2</i>Клипы</h2>
+      <div class="row">
+        <button id="btnAddClip">＋ Добавить клип</button>
+        <button id="btnSplit" class="ghost">✂ Нарезать всё видео</button>
+      </div>
+      <div id="splitBox" class="splitbox">
+        <div class="grid3">
+          <div><label class="f" for="spTarget">Длина, сек</label><input type="number" id="spTarget" min="5" max="600" step="1" value="45"></div>
+          <div><label class="f" for="spMin">Не короче</label><input type="number" id="spMin" min="3" max="600" step="1" value="25"></div>
+          <div><label class="f" for="spMax">Не длиннее</label><input type="number" id="spMax" min="5" max="900" step="1" value="70"></div>
+        </div>
+        <div class="row" style="margin-top:10px">
+          <button id="btnSplitGo" class="primary">Нарезать</button>
+          <button id="btnSplitCancel" class="ghost" style="flex:0 0 auto">Отмена</button>
+        </div>
+        <p class="hint" id="splitHint">Видео будет поделено подряд на части примерно такой длины. Границы потом можно двигать вручную.</p>
+      </div>
+      <div class="clips" id="clipList"></div>
+      <p class="hint">Клик по клипу — выбрать его для правки. Выбранный клип показан на предпросмотре, и все настройки ниже относятся к нему.</p>
+    </section>
+
+    <!-- ШАГ 3 -->
+    <section class="card">
+      <h2><i>3</i>Границы клипа <b class="tag" id="curTag">№1</b></h2>
       <div class="row">
         <button id="btnSetStart">⟦ Начало здесь</button>
         <button id="btnSetEnd">Конец здесь ⟧</button>
@@ -225,9 +281,9 @@ footer a{color:var(--acc)}
       <p class="hint">Кнопки ставят границы по текущему кадру. Для Shorts / TikTok / Reels обычно берут 15–60 секунд.</p>
     </section>
 
-    <!-- ШАГ 3 -->
+    <!-- ШАГ 4 -->
     <section class="card">
-      <h2><i>3</i>Кадрирование</h2>
+      <h2><i>4</i>Кадрирование</h2>
       <div class="seg" id="segCrop">
         <button data-v="vertical" class="on">📱 Вертикально 9:16</button>
         <button data-v="original">🖥 Исходный формат</button>
@@ -239,9 +295,9 @@ footer a{color:var(--acc)}
       <p class="hint">В режиме 9:16 из широкого кадра вырезается вертикальная полоса — ползунком выберите, какую именно часть оставить.</p>
     </section>
 
-    <!-- ШАГ 4 -->
+    <!-- ШАГ 5 -->
     <section class="card">
-      <h2><i>4</i>Автосубтитры</h2>
+      <h2><i>5</i>Автосубтитры</h2>
       <div class="grid3">
         <div>
           <label class="f" for="selModel">Модель Whisper</label>
@@ -270,16 +326,17 @@ footer a{color:var(--acc)}
       </div>
       <label class="chk" style="margin-top:10px"><input type="checkbox" id="chkGpu"> Ускорение WebGPU <span class="hint" style="margin:0" id="gpuNote"></span></label>
       <div class="row" style="margin-top:11px">
-        <button id="btnAsr" class="primary">✨ Распознать речь</button>
+        <button id="btnAsr" class="primary">✨ Распознать в этом клипе</button>
+        <button id="btnAsrAll">✨ Во всех клипах</button>
         <button id="btnAsrStop" class="ghost" style="flex:0 0 auto;display:none">Отмена</button>
       </div>
       <div class="prog" id="asrProg"><i></i></div>
       <div class="status" id="asrStatus">Модель скачается один раз и останется в кеше браузера.</div>
     </section>
 
-    <!-- ШАГ 5 -->
+    <!-- ШАГ 6 -->
     <section class="card">
-      <h2><i>5</i>Субтитры</h2>
+      <h2><i>6</i>Субтитры <b class="tag" id="cueTag">№1</b></h2>
       <div class="row">
         <button id="btnAddCue" class="sm">＋ Добавить строку</button>
         <button id="btnClearCues" class="sm ghost">Очистить всё</button>
@@ -291,9 +348,9 @@ footer a{color:var(--acc)}
       <p class="hint">Время указано <b>внутри клипа</b> (0 — начало отрывка). Реплики группируются по 3–4 слова — так читается лучше всего.</p>
     </section>
 
-    <!-- ШАГ 6 -->
+    <!-- ШАГ 7 -->
     <section class="card">
-      <h2><i>6</i>Стиль субтитров</h2>
+      <h2><i>7</i>Стиль субтитров</h2>
       <div class="grid2">
         <div>
           <label class="f" for="stSize">Размер — <span id="stSizeVal">6.5%</span></label>
@@ -316,9 +373,9 @@ footer a{color:var(--acc)}
       <p class="hint">Жирный шрифт с чёрной обводкой читается на любом фоне. Активное слово подсвечивается — эффект «караоке».</p>
     </section>
 
-    <!-- ШАГ 7 -->
+    <!-- ШАГ 8 -->
     <section class="card">
-      <h2><i>7</i>Экспорт</h2>
+      <h2><i>8</i>Экспорт</h2>
       <div class="grid2">
         <div>
           <label class="f" for="selRes">Качество</label>
@@ -338,17 +395,22 @@ footer a{color:var(--acc)}
       </div>
       <label class="chk" style="margin-top:10px"><input type="checkbox" id="chkMp4" checked> Предпочитать MP4 (если браузер умеет)</label>
       <div class="row" style="margin-top:11px">
-        <button id="btnExport" class="primary">🎬 Экспортировать клип</button>
+        <button id="btnExport" class="primary">🎬 Этот клип</button>
+        <button id="btnExportAll" class="primary">🎬 Все клипы</button>
         <button id="btnExportStop" class="ghost" style="flex:0 0 auto;display:none">Остановить</button>
       </div>
       <div class="prog" id="expProg"><i></i></div>
-      <div class="status" id="expStatus">Клип записывается в реальном времени: 30 секунд клипа ≈ 30 секунд ожидания.</div>
+      <div class="status" id="expStatus">Запись идёт в реальном времени: 30 секунд клипа ≈ 30 секунд ожидания. Не сворачивайте вкладку.</div>
       <div class="result" id="result">
         <video id="outVideo" controls playsinline></video>
         <div class="row" style="margin-top:10px">
           <a id="btnDownload" class="btn primary" download="shorts.mp4" href="#">⬇ Скачать</a>
           <span class="hint" style="margin:0;align-self:center" id="outInfo"></span>
         </div>
+      </div>
+      <div class="row" id="bulkBox" style="margin-top:11px;display:none">
+        <button id="btnZip">📦 Скачать все архивом</button>
+        <button id="btnDlEach" class="ghost">⬇ Скачать по одному</button>
       </div>
     </section>
 
@@ -411,21 +473,42 @@ function dropBanner(id){
 }
 
 /* -------------------------------- состояние ------------------------------ */
+/* Клип — это отрезок видео со своими границами, своим сдвигом кадра и своими
+   субтитрами. Кадрирование и стиль общие: ролики из одного видео должны
+   выглядеть одинаково.                                                     */
+let clipSeq = 0;
+function makeClip(a, b){
+  return { id: ++clipSeq, start: a, end: b, pan: 0.5, cues: [], out: null };
+}
+
 const S = {
   file: null,
   url: null,
   duration: 0,
   vw: 0, vh: 0,
   hasVideoTrack: true,
-  start: 0,
-  end: 0,
+  clips: [],
+  active: 0,
   crop: 'vertical',
-  pan: 0.5,
-  cues: [],
   style: { size: 6.5, pos: 78, color: '#ffffff', active: '#ffd400', box: true, upper: false },
   playingClip: false,
   busy: false
 };
+
+/* Границы, сдвиг и субтитры всегда относятся к выбранному клипу. Через
+   свойства-обёртки — чтобы остальной код работал с S.start / S.cues как
+   раньше и не пришлось переписывать полприложения.                         */
+function cur(){ return S.clips[S.active] || null; }
+[['start', 0], ['end', 0], ['pan', 0.5]].forEach(([key, dflt]) => {
+  Object.defineProperty(S, key, {
+    get(){ const c = cur(); return c ? c[key] : dflt; },
+    set(v){ const c = cur(); if (c) c[key] = v; }
+  });
+});
+Object.defineProperty(S, 'cues', {
+  get(){ const c = cur(); return c ? c.cues : []; },
+  set(v){ const c = cur(); if (c) c.cues = v; }
+});
 
 const video   = $('#video');
 const preview = $('#preview');
@@ -462,8 +545,11 @@ function loadFile(f){
   if (S.url){ try { URL.revokeObjectURL(S.url); } catch(e){} }
   S.file = f;
   S.url  = URL.createObjectURL(f);
-  S.cues = [];
+  dropClips();
+  S.clips = [];
+  S.active = 0;
   renderCues();
+  renderClips();
 
   const type = f.type || '';
   const can  = type ? video.canPlayType(type) : '';
@@ -519,10 +605,9 @@ async function onMeta(){
   }
   dropBanner('playback');
 
-  S.start = 0;
-  S.end   = Math.min(S.duration, 30) || S.duration;
-  S.pan   = 0.5;
-  $('#pan').value = 0.5; updatePanLabel();
+  dropClips();
+  S.clips = [makeClip(0, Math.min(S.duration, 30) || S.duration)];
+  S.active = 0;
 
   const seek = $('#seek');
   seek.min = 0; seek.max = String(S.duration || 1); seek.step = '0.001'; seek.value = '0';
@@ -530,8 +615,9 @@ async function onMeta(){
   $('#btnPlay').disabled = false;
   $('#btnClip').disabled = false;
   $('#tools').classList.remove('dis');
+  $('#spTarget').value = String(Math.min(45, Math.max(10, Math.round(S.duration / 6))));
 
-  syncTrimInputs();
+  syncClipUi();
   resizePreview();
   drawPreview();
   startLoop();
@@ -781,11 +867,196 @@ function setTrim(a, b){
   syncTrimInputs();
   clampCues();
   renderCues();
+  renderClips();
 }
 $('#btnSetStart').addEventListener('click', () => setTrim(video.currentTime, Math.max(S.end, video.currentTime + 0.2)));
 $('#btnSetEnd')  .addEventListener('click', () => setTrim(Math.min(S.start, video.currentTime - 0.2), video.currentTime));
 $('#inStart').addEventListener('change', e => setTrim(parseFloat(e.target.value) || 0, S.end));
 $('#inEnd')  .addEventListener('change', e => setTrim(S.start, parseFloat(e.target.value) || 0));
+
+/* -------------------------------- клипы ---------------------------------- */
+function dropClips(){
+  S.clips.forEach(c => { if (c.out && c.out.url){ try { URL.revokeObjectURL(c.out.url); } catch(e){} } });
+}
+
+function syncClipUi(){
+  const c = cur();
+  $('#pan').value = String(c ? c.pan : 0.5);
+  updatePanLabel();
+  syncTrimInputs();
+  renderCues();
+  renderClips();
+  const tag = '№' + (S.clips.length ? S.active + 1 : '—');
+  $('#curTag').textContent = tag;
+  $('#cueTag').textContent = tag;
+  drawPreview();
+}
+
+function selectClip(i){
+  if (i < 0 || i >= S.clips.length || i === S.active) return;
+  S.playingClip = false;
+  S.active = i;
+  syncClipUi();
+  try { video.currentTime = S.clips[i].start; } catch(e){}
+}
+
+function renderClips(){
+  const box = $('#clipList');
+  if (!S.clips.length){
+    box.innerHTML = '<div class="clips-empty">Клипов пока нет. Нажмите «＋ Добавить клип», чтобы взять кусок вручную, или «✂ Нарезать всё видео».</div>';
+    $('#bulkBox').style.display = 'none';
+    return;
+  }
+  let html = '';
+  S.clips.forEach((c, i) => {
+    const words = c.cues.reduce((a, x) => a + x.words.length, 0);
+    const subs = c.cues.length ? c.cues.length + ' реплик, ' + words + ' слов' : 'без субтитров';
+    const done = c.out ? 'готов ' + fmtSize(c.out.size) + ' · ' : '';
+    html += '<div class="clip' + (i === S.active ? ' on' : '') + '" data-i="' + i + '">' +
+      '<div class="num">' + (i + 1) + '</div>' +
+      '<div class="meta">' +
+        '<div class="when"><span class="dot ' + (c.out ? 'ready' : '') + '"></span>' +
+          fmtTime(c.start) + ' → ' + fmtTime(c.end) + ' · ' + (c.end - c.start).toFixed(1) + ' с</div>' +
+        '<div class="sub">' + done + esc(subs) + '</div>' +
+      '</div>' +
+      '<div class="acts">' +
+        (c.out ? '<a href="' + c.out.url + '" download="' + esc(c.out.name) + '" title="Скачать клип">⬇</a>' : '') +
+        '<button data-a="play" title="Прослушать клип">▶</button>' +
+        '<button data-a="dup" title="Сделать копию">⧉</button>' +
+        '<button class="del" data-a="del" title="Удалить клип">✕</button>' +
+      '</div></div>';
+  });
+  box.innerHTML = html;
+  $('#bulkBox').style.display = S.clips.filter(c => c.out).length > 1 ? '' : 'none';
+  renderTimelineClips();
+}
+
+/* Все клипы разом видно на таймлайне — так понятно, что уже занято,
+   а что осталось незакрытым. Выбранный рисуется отдельной полоской. */
+function renderTimelineClips(){
+  const box = $('#tlClips');
+  const d = S.duration;
+  if (!d){ box.innerHTML = ''; return; }
+  box.innerHTML = S.clips.map((c, i) => i === S.active ? '' :
+    '<div class="tl-clip" style="left:' + (c.start / d * 100) + '%;width:' +
+    ((c.end - c.start) / d * 100) + '%"></div>').join('');
+}
+
+$('#clipList').addEventListener('click', async e => {
+  const row = e.target.closest('.clip');
+  if (!row) return;
+  const i = +row.dataset.i;
+  const act = e.target.dataset.a;
+  if (act === 'del'){
+    if (S.busy){ banner('busy','warn','Дождитесь окончания текущей операции.'); return; }
+    const c = S.clips[i];
+    if (c && c.out && c.out.url){ try { URL.revokeObjectURL(c.out.url); } catch(err){} }
+    S.clips.splice(i, 1);
+    S.active = clamp(S.active > i ? S.active - 1 : S.active, 0, Math.max(0, S.clips.length - 1));
+    syncClipUi();
+    return;
+  }
+  if (act === 'dup'){
+    if (S.busy) return;
+    const c = S.clips[i];
+    const copy = makeClip(c.start, c.end);
+    copy.pan = c.pan;
+    copy.cues = c.cues.map(q => ({ start: q.start, end: q.end, words: q.words.map(w => ({ ...w })) }));
+    S.clips.splice(i + 1, 0, copy);
+    S.active = i + 1;
+    syncClipUi();
+    return;
+  }
+  if (act === 'play'){
+    selectClip(i);
+    resumeAudio();
+    try { video.currentTime = S.clips[i].start; } catch(err){}
+    S.playingClip = true;
+    await safePlay();
+    return;
+  }
+  if (e.target.tagName !== 'A') selectClip(i);
+});
+
+$('#btnAddClip').addEventListener('click', () => {
+  if (!S.hasVideoTrack) return;
+  const last = S.clips.length ? Math.max(...S.clips.map(c => c.end)) : 0;
+  let a = S.clips.length ? last : video.currentTime;
+  if (a >= S.duration - 0.5) a = clamp(video.currentTime, 0, Math.max(0, S.duration - 1));
+  const b = clamp(a + 30, a + 0.5, S.duration);
+  S.clips.push(makeClip(a, b));
+  S.active = S.clips.length - 1;
+  syncClipUi();
+  try { video.currentTime = a; } catch(e){}
+  const rows = $$('.clip', $('#clipList'));
+  if (rows.length) rows[rows.length - 1].scrollIntoView({ block: 'nearest' });
+});
+
+/* --- автонарезка всего видео на равные части --- */
+$('#btnSplit').addEventListener('click', () => {
+  $('#splitBox').classList.toggle('on');
+  updateSplitHint();
+});
+$('#btnSplitCancel').addEventListener('click', () => $('#splitBox').classList.remove('on'));
+['#spTarget', '#spMin', '#spMax'].forEach(id => $(id).addEventListener('input', updateSplitHint));
+
+function splitPlan(target, mn, mx){
+  const D = S.duration;
+  const parts = [];
+  let pos = 0, guard = 0;
+  while (D - pos > 0.05 && guard++ < 10000){
+    if (D - pos <= mx){ parts.push([pos, D]); break; }
+    parts.push([pos, pos + target]);
+    pos += target;
+  }
+  if (parts.length >= 2){                     // короткий хвост приклеиваем к предыдущему
+    const tail = parts[parts.length - 1];
+    if (tail[1] - tail[0] < mn && tail[1] - parts[parts.length - 2][0] <= mx){
+      parts[parts.length - 2][1] = tail[1];
+      parts.pop();
+    }
+  }
+  return parts;
+}
+
+function splitParams(){
+  const target = clamp(parseFloat($('#spTarget').value) || 45, 3, 900);
+  const mn = clamp(parseFloat($('#spMin').value) || 25, 1, target);
+  const mx = clamp(parseFloat($('#spMax').value) || 70, target, 3600);
+  return { target, mn, mx };
+}
+
+function updateSplitHint(){
+  if (!S.duration) return;
+  const { target, mn, mx } = splitParams();
+  const n = splitPlan(target, mn, mx).length;
+  const loss = S.clips.filter(c => c.cues.length || c.out).length;
+  let text = 'Получится примерно <b>' + n + '</b> ' +
+    (n % 10 === 1 && n % 100 !== 11 ? 'клип' : [2,3,4].indexOf(n % 10) >= 0 && [12,13,14].indexOf(n % 100) < 0 ? 'клипа' : 'клипов') +
+    '. Границы потом можно двигать вручную.';
+  if (loss){
+    text += ' <span style="color:var(--warn)">Внимание: текущие клипы будут заменены, ' +
+      'а сделанные субтитры и уже отрендеренные файлы (' + loss + ') потеряются.</span>';
+  }
+  $('#splitHint').innerHTML = text;
+}
+
+$('#btnSplitGo').addEventListener('click', () => {
+  if (S.busy){ banner('busy','warn','Дождитесь окончания текущей операции.'); return; }
+  if (!S.duration) return;
+  const { target, mn, mx } = splitParams();
+  const parts = splitPlan(target, mn, mx);
+  if (!parts.length) return;
+  dropClips();
+  S.clips = parts.map(([a, b]) => makeClip(a, b));
+  S.active = 0;
+  $('#splitBox').classList.remove('on');
+  syncClipUi();
+  try { video.currentTime = 0; } catch(e){}
+  banner('split','ok','<b>Готово: ' + parts.length + ' клипов.</b> Пройдитесь по списку, поправьте границы, ' +
+    'где нужно — и запускайте «🎬 Все клипы» в разделе «Экспорт».');
+  setTimeout(() => dropBanner('split'), 9000);
+});
 
 /* ------------------------------ кадрирование ----------------------------- */
 $$('#segCrop button').forEach(b => b.addEventListener('click', () => {
@@ -1247,28 +1518,24 @@ $('#gpuNote').textContent = navigator.gpu ? '' : '(недоступно в эт�
 
 $('#btnAsrStop').addEventListener('click', () => { asrAbort = true; setAsrStatus('Отмена…'); });
 
-$('#btnAsr').addEventListener('click', async () => {
-  if (S.busy) return;
-  if (!S.hasVideoTrack){ banner('asr','warn','Сначала выберите видео.'); return; }
-  if (S.end - S.start < 0.3){ banner('asr','warn','Отрывок слишком короткий.'); return; }
-  dropBanner('asr'); dropBanner('cdn');
-
-  S.busy = true; asrAbort = false;
-  $('#btnAsr').disabled = true;
-  $('#btnAsrStop').style.display = '';
+/* Распознавание одного (выбранного) клипа. S.busy и кнопками управляет
+   вызывающий — так один и тот же код работает и для одного клипа, и для
+   очереди из всех.                                                        */
+async function asrActiveClip(prefix){
+  prefix = prefix || '';
   setAsrProg(0);
 
   try {
     // 1. звук
-    setAsrStatus('Снимаю звук отрывка…');
+    setAsrStatus(prefix + 'Снимаю звук отрывка…');
     const audio = await captureSegmentAudio(p => {
       setAsrProg(p * 0.3);
-      setAsrStatus('Снимаю звук отрывка… ' + Math.round(p * 100) + '%');
+      setAsrStatus(prefix + 'Снимаю звук отрывка… ' + Math.round(p * 100) + '%');
     });
     if (asrAbort) throw new Error('Отменено');
 
     // 2. модель
-    setAsrStatus('Загружаю модель распознавания…');
+    setAsrStatus(prefix + 'Загружаю модель распознавания…');
     const model = $('#selModel').value;
     let useGpu = $('#chkGpu').checked && !!navigator.gpu;
     let pipe = await getAsrPipe(model, useGpu, modelProgress());
@@ -1277,7 +1544,7 @@ $('#btnAsr').addEventListener('click', async () => {
 
     // 3. распознавание
     setAsrProg(0.68);
-    setAsrStatus('Распознаю речь… (это самая долгая часть)');
+    setAsrStatus(prefix + 'Распознаю речь… (это самая долгая часть)');
     const lang = $('#selLang').value;
     const base = { chunk_length_s: 30, stride_length_s: 5, task: 'transcribe' };
     if (lang !== 'auto') base.language = lang;
@@ -1303,15 +1570,19 @@ $('#btnAsr').addEventListener('click', async () => {
 
     const words = chunksToWords(out, wordLevel, Math.max(S.end - S.start, audio.length / 16000));
     if (!words.length){
-      banner('asr','info','<b>Речь не распознана.</b> Возможно, в отрывке нет разборчивого голоса. Попробуйте модель точнее (small), задайте язык явно или впишите субтитры вручную.');
-      setAsrStatus('Готово: реплик не найдено.');
-    } else {
-      S.cues = groupWords(words);
-      renderCues();
-      setAsrStatus('Готово: ' + S.cues.length + ' реплик' + (wordLevel ? ' (пословные тайминги)' : ' (посегментные тайминги)'));
+      if (!prefix){
+        banner('asr','info','<b>Речь не распознана.</b> Возможно, в отрывке нет разборчивого голоса. Попробуйте модель точнее (small), задайте язык явно или впишите субтитры вручную.');
+      }
+      setAsrStatus(prefix + 'Готово: реплик не найдено.');
+      return { ok: true, cues: 0 };
     }
+    S.cues = groupWords(words);
+    renderCues();
+    renderClips();
+    setAsrStatus(prefix + 'Готово: ' + S.cues.length + ' реплик' +
+      (wordLevel ? ' (пословные тайминги)' : ' (посегментные тайминги)'));
     setAsrProg(1);
-    setTimeout(() => setAsrProg(null), 900);
+    return { ok: true, cues: S.cues.length };
 
   } catch(err){
     setAsrProg(null);
@@ -1322,20 +1593,60 @@ $('#btnAsr').addEventListener('click', async () => {
         'Всё остальное — обрезка, кадрирование, субтитры и экспорт — работает офлайн: ' +
         'впишите субтитры вручную — нажмите «＋ Добавить строку» в разделе «Субтитры».');
       setAsrStatus('CDN недоступен — впишите субтитры вручную.');
-    } else if (msg === 'Отменено'){
-      setAsrStatus('Отменено.');
-    } else {
-      banner('asr','err','<b>Распознавание не удалось.</b> ' + esc(msg) +
-        '<br>Можно выбрать модель полегче (tiny), укоротить отрывок или вписать субтитры вручную.');
-      setAsrStatus('Ошибка: ' + msg);
+      return { ok: false, fatal: true };
     }
+    if (msg === 'Отменено'){
+      setAsrStatus('Отменено.');
+      return { ok: false, fatal: true };
+    }
+    banner('asr','err','<b>Распознавание не удалось.</b> ' + esc(msg) +
+      '<br>Можно выбрать модель полегче (tiny), укоротить отрывок или вписать субтитры вручную.');
+    setAsrStatus('Ошибка: ' + msg);
+    return { ok: false, fatal: false };
+  }
+}
+
+async function runAsr(indices){
+  if (S.busy) return;
+  if (!S.hasVideoTrack){ banner('asr','warn','Сначала выберите видео.'); return; }
+  if (!indices.length){ banner('asr','warn','Нет клипов для распознавания.'); return; }
+  dropBanner('asr'); dropBanner('cdn');
+
+  S.busy = true; asrAbort = false;
+  $('#btnAsr').disabled = true;
+  $('#btnAsrAll').disabled = true;
+  $('#btnAsrStop').style.display = '';
+
+  let done = 0, failed = 0;
+  try {
+    for (let k = 0; k < indices.length; k++){
+      if (asrAbort) break;
+      const i = indices[k];
+      if (S.clips[i].end - S.clips[i].start < 0.3){ failed++; continue; }
+      S.active = i;
+      syncClipUi();
+      const prefix = indices.length > 1 ? 'Клип ' + (i + 1) + ' из ' + S.clips.length + ': ' : '';
+      const res = await asrActiveClip(prefix);
+      if (res && res.ok) done++; else failed++;
+      if (res && res.fatal) break;
+    }
+    if (indices.length > 1){
+      setAsrStatus('Готово: распознано клипов ' + done + ' из ' + indices.length +
+        (failed ? ', с ошибками — ' + failed : ''));
+    }
+    setTimeout(() => setAsrProg(null), 900);
   } finally {
     S.busy = false; asrAbort = false;
     $('#btnAsr').disabled = false;
+    $('#btnAsrAll').disabled = false;
     $('#btnAsrStop').style.display = 'none';
+    renderClips();
     drawPreview();
   }
-});
+}
+
+$('#btnAsr').addEventListener('click', () => runAsr(S.clips.length ? [S.active] : []));
+$('#btnAsrAll').addEventListener('click', () => runAsr(S.clips.map((_, i) => i)));
 
 /* chunks → плоский список слов с таймингами (в секундах от начала клипа) */
 function chunksToWords(out, wordLevel, dur){
@@ -1436,17 +1747,184 @@ function setExpProg(p){
 }
 
 let exportAbort = false;
-$('#btnExportStop').addEventListener('click', () => { exportAbort = true; setExpStatus('Останавливаю…'); });
+let queueMode = false;
+let queueStop = false;
+$('#btnExportStop').addEventListener('click', () => {
+  exportAbort = true; queueStop = true; setExpStatus('Останавливаю…');
+});
 
-$('#btnExport').addEventListener('click', async () => {
-  if (S.busy) return;
-  if (!S.hasVideoTrack){ banner('exp','warn','Сначала выберите видео.'); return; }
+function canExport(){
+  if (S.busy) return false;
+  if (!S.hasVideoTrack){ banner('exp','warn','Сначала выберите видео.'); return false; }
+  if (!S.clips.length){ banner('exp','warn','Сначала добавьте хотя бы один клип.'); return false; }
   if (!window.MediaRecorder){
     banner('exp','err','<b>Этот браузер не поддерживает MediaRecorder</b> — запись видео невозможна. Откройте сайт в Chrome, Edge или Firefox.');
-    return;
+    return false;
   }
   dropBanner('exp');
+  return true;
+}
+
+$('#btnExport').addEventListener('click', async () => {
+  if (!canExport()) return;
+  queueMode = false;
   await doExport();
+});
+
+/* Очередь: клипы пишутся строго по одному — MediaRecorder работает в
+   реальном времени и разделить видеоэлемент между ними всё равно нельзя. */
+$('#btnExportAll').addEventListener('click', async () => {
+  if (!canExport()) return;
+  const pending = S.clips.map((c, i) => i).filter(i => !S.clips[i].out);
+  const list = pending.length ? pending : S.clips.map((_, i) => i);
+  if (!pending.length && S.clips.length){
+    banner('exp','info','Все клипы уже отрендерены — перезаписываю их заново.');
+  }
+  const total = list.reduce((a, i) => a + (S.clips[i].end - S.clips[i].start), 0);
+  queueMode = true; queueStop = false;
+  $('#btnExport').disabled = true;
+  $('#btnExportAll').disabled = true;
+
+  let done = 0, failed = 0;
+  try {
+    for (let k = 0; k < list.length; k++){
+      if (queueStop) break;
+      S.active = list[k];
+      syncClipUi();
+      setExpStatus('Клип ' + (list[k] + 1) + ' из ' + S.clips.length +
+        ' — осталось примерно ' + fmtTime(total - list.slice(0, k)
+          .reduce((a, i) => a + (S.clips[i].end - S.clips[i].start), 0)));
+      await doExport();
+      if (S.clips[list[k]].out) done++; else failed++;
+    }
+  } finally {
+    queueMode = false;
+    $('#btnExport').disabled = false;
+    $('#btnExportAll').disabled = false;
+    $('#btnExportStop').style.display = 'none';
+    renderClips();
+    setExpProg(null);
+    setExpStatus(queueStop
+      ? 'Остановлено. Готово клипов: ' + done + ' из ' + list.length + '.'
+      : 'Готово: ' + done + ' из ' + list.length +
+        (failed ? ', не получилось — ' + failed : '') +
+        '. Скачайте их по одному или архивом.');
+    if (done) $('#bulkBox').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }
+});
+
+/* --------------------------- скачивание пачкой --------------------------- */
+$('#btnDlEach').addEventListener('click', async () => {
+  const ready = S.clips.filter(c => c.out);
+  for (const c of ready){
+    const a = document.createElement('a');
+    a.href = c.out.url; a.download = c.out.name;
+    document.body.appendChild(a); a.click(); a.remove();
+    await sleep(400);                         // иначе браузер придержит часть файлов
+  }
+});
+
+/* ZIP без сжатия: видео уже сжато, а так обходимся без внешних библиотек
+   и остаёмся полностью офлайн. */
+const CRC_TABLE = (() => {
+  const t = new Uint32Array(256);
+  for (let n = 0; n < 256; n++){
+    let c = n;
+    for (let k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+    t[n] = c >>> 0;
+  }
+  return t;
+})();
+function crc32(u8){
+  let c = 0xFFFFFFFF;
+  for (let i = 0; i < u8.length; i++) c = CRC_TABLE[(c ^ u8[i]) & 0xFF] ^ (c >>> 8);
+  return (c ^ 0xFFFFFFFF) >>> 0;
+}
+function zipStore(files){
+  const enc = new TextEncoder();
+  const now = new Date();
+  const dosTime = ((now.getHours() << 11) | (now.getMinutes() << 5) | (now.getSeconds() >> 1)) & 0xFFFF;
+  const dosDate = (((now.getFullYear() - 1980) << 9) | ((now.getMonth() + 1) << 5) | now.getDate()) & 0xFFFF;
+  const chunks = [], central = [];
+  let offset = 0;
+
+  for (const f of files){
+    const name = enc.encode(f.name);
+    const crc = crc32(f.data);
+    const local = new DataView(new ArrayBuffer(30));
+    local.setUint32(0, 0x04034b50, true);
+    local.setUint16(4, 20, true);
+    local.setUint16(6, 0x0800, true);         // имена в UTF-8
+    local.setUint16(8, 0, true);              // метод: без сжатия
+    local.setUint16(10, dosTime, true);
+    local.setUint16(12, dosDate, true);
+    local.setUint32(14, crc, true);
+    local.setUint32(18, f.data.length, true);
+    local.setUint32(22, f.data.length, true);
+    local.setUint16(26, name.length, true);
+    local.setUint16(28, 0, true);
+    chunks.push(new Uint8Array(local.buffer), name, f.data);
+
+    const cd = new DataView(new ArrayBuffer(46));
+    cd.setUint32(0, 0x02014b50, true);
+    cd.setUint16(4, 20, true);
+    cd.setUint16(6, 20, true);
+    cd.setUint16(8, 0x0800, true);
+    cd.setUint16(10, 0, true);
+    cd.setUint16(12, dosTime, true);
+    cd.setUint16(14, dosDate, true);
+    cd.setUint32(16, crc, true);
+    cd.setUint32(20, f.data.length, true);
+    cd.setUint32(24, f.data.length, true);
+    cd.setUint16(28, name.length, true);
+    cd.setUint32(42, offset, true);
+    central.push(new Uint8Array(cd.buffer), name);
+    offset += 30 + name.length + f.data.length;
+  }
+
+  const cdSize = central.reduce((a, c) => a + c.length, 0);
+  const end = new DataView(new ArrayBuffer(22));
+  end.setUint32(0, 0x06054b50, true);
+  end.setUint16(8, files.length, true);
+  end.setUint16(10, files.length, true);
+  end.setUint32(12, cdSize, true);
+  end.setUint32(16, offset, true);
+  return new Blob(chunks.concat(central, [new Uint8Array(end.buffer)]),
+                  { type: 'application/zip' });
+}
+
+$('#btnZip').addEventListener('click', async () => {
+  const ready = S.clips.filter(c => c.out && c.out.blob);
+  if (!ready.length) return;
+  const total = ready.reduce((a, c) => a + c.out.size, 0);
+  if (total > 3.5e9){
+    banner('zip','warn','<b>Слишком много данных для одного архива</b> (' + fmtSize(total) +
+      '). Формат ZIP без ZIP64 не тянет больше 4 ГБ — скачайте клипы по одному.');
+    return;
+  }
+  const btn = $('#btnZip');
+  const label = btn.textContent;
+  btn.disabled = true;
+  try {
+    btn.textContent = 'Собираю архив…';
+    const files = [];
+    for (const c of ready){
+      files.push({ name: c.out.name, data: new Uint8Array(await c.out.blob.arrayBuffer()) });
+    }
+    const zip = zipStore(files);
+    const url = URL.createObjectURL(zip);
+    const a = document.createElement('a');
+    a.href = url; a.download = 'shorts_' + ready.length + '_клипов.zip';
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+    window.__SVM.lastZip = { size: zip.size, files: ready.length };
+  } catch(err){
+    banner('zip','err','<b>Не удалось собрать архив:</b> ' + esc(err && err.message || err) +
+      '<br>Скачайте клипы по одному — кнопка рядом.');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = label;
+  }
 });
 
 async function doExport(){
@@ -1513,19 +1991,35 @@ async function doExport(){
     const ok = await safePlay();
     if (!ok) throw new Error('Браузер заблокировал воспроизведение. Нажмите «▶ Играть», затем повторите экспорт.');
 
+    // После перемотки декодер успевает подтормозить, и play() возвращается
+    // раньше, чем кадры реально поехали. Если начать запись сразу, эта пауза
+    // попадёт в клип застывшим кадром — ждём, пока время сдвинется.
+    const spin = performance.now();
+    while (video.currentTime <= S.start + 0.005 && !video.ended
+           && performance.now() - spin < 3000){
+      await sleep(16);
+    }
+    drawFrame(ctx, W, H, video.currentTime - S.start);
+
     rec.start(200);
-    setExpStatus('Записываю клип… не сворачивайте вкладку.');
+    if (!queueMode) setExpStatus('Записываю клип… не сворачивайте вкладку.');
 
     const total = Math.max(0.2, S.end - S.start);
     const t0 = performance.now();
     const limit = total * 1000 * 3 + 20000;
+    const diag = { frames: 0, maxGap: 0, startedAt: video.currentTime };
+    let lastTick = t0;
 
     await new Promise(res => {
       const tick = () => {
+        const now = performance.now();
+        diag.maxGap = Math.max(diag.maxGap, now - lastTick);
+        lastTick = now;
+        diag.frames++;
         const t = video.currentTime - S.start;
         drawFrame(ctx, W, H, t);
         setExpProg(clamp(t / total, 0, 1));
-        const timeUp = performance.now() - t0 > limit;
+        const timeUp = now - t0 > limit;
         if (exportAbort || video.ended || video.currentTime >= S.end - 0.005 || timeUp){ res(); return; }
         raf = requestAnimationFrame(tick);
       };
@@ -1533,6 +2027,9 @@ async function doExport(){
     });
 
     cancelAnimationFrame(raf);
+    diag.wallMs = performance.now() - t0;
+    diag.mediaSpan = video.currentTime - diag.startedAt;
+    diag.overshoot = video.currentTime - S.end;
     video.pause();
     if (g) g.monitor.gain.value = savedMon;
     await sleep(80);
@@ -1546,21 +2043,35 @@ async function doExport(){
     if (!blob.size) throw new Error('Запись получилась пустой. Попробуйте отрывок подлиннее или другое качество.');
 
     const url = URL.createObjectURL(blob);
-    const outV = $('#outVideo');
-    if (outV.dataset.url) { try { URL.revokeObjectURL(outV.dataset.url); } catch(e){} }
-    outV.dataset.url = url;
-    outV.src = url;
     const ext = type.indexOf('mp4') >= 0 ? 'mp4' : 'webm';
+    const num = String(S.active + 1).padStart(3, '0');
+    const name = 'shorts_' + num + '_' + W + 'x' + H + '.' + ext;
+
+    // результат принадлежит клипу: старый файл этого же клипа освобождаем,
+    // чужие трогать нельзя — на них ссылаются кнопки «Скачать» в списке
+    const c = cur();
+    if (c){
+      if (c.out && c.out.url){ try { URL.revokeObjectURL(c.out.url); } catch(e){} }
+      c.out = { url, size: blob.size, ext, name, W, H, blob };
+    }
+
+    const outV = $('#outVideo');
+    outV.src = url;
     const a = $('#btnDownload');
     a.href = url;
-    a.download = 'shorts_' + W + 'x' + H + '.' + ext;
-    $('#outInfo').textContent = W + '×' + H + ' · ' + fmtSize(blob.size) + ' · ' + ext.toUpperCase();
+    a.download = name;
+    $('#outInfo').textContent = 'Клип №' + (S.active + 1) + ' · ' + W + '×' + H + ' · ' +
+      fmtSize(blob.size) + ' · ' + ext.toUpperCase();
     $('#result').classList.add('on');
+    renderClips();
     setExpProg(1);
-    setExpStatus(exportAbort ? 'Остановлено — сохранена записанная часть.' : 'Готово! Проверьте результат и скачайте.');
-    $('#result').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    if (!queueMode){
+      setExpStatus(exportAbort ? 'Остановлено — сохранена записанная часть.' : 'Готово! Проверьте результат и скачайте.');
+      $('#result').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
 
-    window.__SVM.lastExport = { size: blob.size, type, W, H, ext };
+    window.__SVM.lastExport = { size: blob.size, type, W, H, ext, name, clip: S.active + 1,
+                                diag: { ...diag, want: total } };
 
   } catch(err){
     cancelAnimationFrame(raf);
@@ -1573,8 +2084,10 @@ async function doExport(){
     window.__SVM.lastExport = { size: 0, error: String(err && err.message || err) };
   } finally {
     S.busy = false; exportAbort = false;
-    $('#btnExport').disabled = false;
-    $('#btnExportStop').style.display = 'none';
+    if (!queueMode){                          // в очереди кнопками рулит она сама
+      $('#btnExport').disabled = false;
+      $('#btnExportStop').style.display = 'none';
+    }
   }
 }
 
@@ -1583,15 +2096,24 @@ window.__SVM = {
   state: S,
   ready: false,
   lastExport: null,
+  lastZip: null,
   setTrim, groupWords, chunksToWords, captureSegmentAudio, resampleTo16k,
   outSize, cropRect, renderCues, asrDiag, isGpuError, transcribe,
-  setCues(arr){ S.cues = arr.map(c => ({ start: c.start, end: c.end, words: makeWords(c.text, c.start, c.end) })); renderCues(); }
+  selectClip, splitPlan, zipStore, crc32, syncClipUi,
+  clips(){ return S.clips.map((c, i) => ({
+    n: i + 1, start: c.start, end: c.end, dur: +(c.end - c.start).toFixed(3),
+    pan: c.pan, cues: c.cues.length, ready: !!c.out,
+    size: c.out ? c.out.size : 0, name: c.out ? c.out.name : ''
+  })); },
+  setClips(arr){ dropClips(); S.clips = arr.map(x => makeClip(x.start, x.end)); S.active = 0; syncClipUi(); },
+  setCues(arr){ S.cues = arr.map(c => ({ start: c.start, end: c.end, words: makeWords(c.text, c.start, c.end) })); renderCues(); renderClips(); }
 };
 
 // стартовое состояние
 $('#panBox').style.display = '';
 updatePanLabel();
 renderCues();
+renderClips();
 drawFrame(pctx, preview.width, preview.height, 0);
 
 if (!window.MediaRecorder){
