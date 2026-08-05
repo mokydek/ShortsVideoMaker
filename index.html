@@ -94,6 +94,16 @@ label.f{display:block;font-size:12px;color:var(--muted);margin:0 0 5px}
 .drop:hover,.drop.over{border-color:var(--acc);background:rgba(167,139,250,.08)}
 .drop b{display:block;font-size:16px;margin-bottom:4px}
 .drop small{color:var(--muted)}
+.srclist{margin-top:10px;display:flex;flex-direction:column;gap:4px;max-height:200px;overflow:auto}
+.srcitem{display:grid;grid-template-columns:1fr auto 26px;gap:9px;align-items:center;
+  padding:6px 9px;border:1px solid var(--line);border-radius:9px;background:#100e1c;
+  cursor:pointer;font-size:13px;transition:.12s}
+.srcitem:hover{border-color:var(--acc)}
+.srcitem.on{background:rgba(167,139,250,.13);border-color:var(--acc)}
+.srcitem .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.srcitem .dur{color:var(--muted);font-variant-numeric:tabular-nums;font-size:12px}
+.srcitem .del{background:transparent;border:0;color:var(--muted);padding:3px 5px;border-radius:6px}
+.srcitem .del:hover{color:var(--err);background:rgba(251,113,133,.13)}
 .urlrow{display:flex;gap:8px;margin-top:11px}
 .urlrow input{flex:1 1 auto;font-size:13.5px}
 .urlrow button{flex:0 0 auto}
@@ -241,15 +251,19 @@ footer a{color:var(--acc)}
 <!-- ШАГ 1 -->
 <section class="card">
   <h2><i>1</i>Видео</h2>
-  <div class="drop" id="drop" tabindex="0" role="button" aria-label="Выбрать видеофайл">
-    <b>Перетащите видео или ссылку сюда — либо нажмите, чтобы выбрать файл</b>
-    <small>MP4, WebM, MOV — файл остаётся на вашем компьютере</small>
+  <div class="drop" id="drop" tabindex="0" role="button" aria-label="Выбрать видеофайлы">
+    <b>Перетащите видео или ссылку сюда — либо нажмите, чтобы выбрать файлы</b>
+    <small>MP4, WebM, MOV · можно сразу несколько — например, весь сезон · файлы остаются на вашем компьютере</small>
   </div>
-  <input type="file" id="file" accept="video/*,.mp4,.webm,.mov,.m4v,.mkv" class="sr">
+  <input type="file" id="file" accept="video/*,.mp4,.webm,.mov,.m4v,.mkv" class="sr" multiple>
+  <div class="status" id="srcStatus"></div>
+  <div class="srclist" id="srcList"></div>
+  <input type="file" id="fileAdd" accept="video/*,.mp4,.webm,.mov,.m4v,.mkv" class="sr" multiple>
   <div class="urlrow">
     <input type="url" id="inUrl" placeholder="…или вставьте прямую ссылку на видеофайл: https://…/video.mp4"
            spellcheck="false" autocomplete="off" aria-label="Ссылка на видеофайл">
     <button id="btnUrl">Загрузить</button>
+    <button id="btnAddFiles" class="ghost" style="flex:0 0 auto">＋ Ещё файлы</button>
     <button id="btnUrlStop" class="ghost" style="display:none;flex:0 0 auto">Отмена</button>
   </div>
   <div class="prog" id="dlProg"><i></i></div>
@@ -606,16 +620,23 @@ function dropBanner(id){
    субтитрами. Кадрирование и стиль общие: ролики из одного видео должны
    выглядеть одинаково.                                                     */
 let clipSeq = 0;
-function makeClip(a, b){
-  return { id: ++clipSeq, start: a, end: b, pan: 0.5, cues: [], out: null };
+function makeClip(a, b, srcId){
+  return { id: ++clipSeq, srcId: srcId || (S.sources[S.srcIndex] ? S.sources[S.srcIndex].id : 0),
+           start: a, end: b, pan: 0.5, cues: [], out: null };
+}
+
+/* Источник — один загруженный файл со своим разбором звука. Их может быть
+   несколько: например, весь сезон сразу. Клип помнит, из какого источника
+   он вырезан, и при переключении на него видео подменяется само.          */
+let srcSeq = 0;
+function makeSource(file, url){
+  return { id: ++srcSeq, file, url, name: file.name, duration: 0, vw: 0, vh: 0,
+           hasVideoTrack: true, bars: null, wave: null, autoIx: null, ready: false };
 }
 
 const S = {
-  file: null,
-  url: null,
-  duration: 0,
-  vw: 0, vh: 0,
-  hasVideoTrack: true,
+  sources: [],
+  srcIndex: 0,
   clips: [],
   active: 0,
   crop: 'vertical',
@@ -642,6 +663,21 @@ Object.defineProperty(S, 'cues', {
   set(v){ const c = cur(); if (c) c.cues = v; }
 });
 
+/* То же и для источника: S.file, S.duration и прочее всегда относятся к тому
+   файлу, который сейчас открыт в плеере. */
+function src(){ return S.sources[S.srcIndex] || null; }
+[['file', null], ['url', null], ['duration', 0], ['vw', 0], ['vh', 0],
+ ['hasVideoTrack', false], ['bars', null]].forEach(([key, dflt]) => {
+  Object.defineProperty(S, key, {
+    get(){ const s = src(); return s ? s[key] : dflt; },
+    set(v){ const s = src(); if (s) s[key] = v; }
+  });
+});
+Object.defineProperty(S, 'wave', {
+  get(){ const s = src(); return s ? s.wave : null; },
+  set(v){ const s = src(); if (s) s.wave = v; }
+});
+
 const video   = $('#video');
 const preview = $('#preview');
 const pctx    = preview.getContext('2d');
@@ -653,7 +689,19 @@ dropEl.addEventListener('click', () => fileEl.click());
 dropEl.addEventListener('keydown', e => {
   if (e.key === 'Enter' || e.key === ' '){ e.preventDefault(); fileEl.click(); }
 });
-fileEl.addEventListener('change', () => { if (fileEl.files && fileEl.files[0]) loadFile(fileEl.files[0]); });
+fileEl.addEventListener('change', () => {
+  if (!fileEl.files || !fileEl.files.length) return;
+  const picked = Array.from(fileEl.files);
+  dropAllSources();                 // выбор через кнопку начинает работу заново
+  addSources(picked);
+  fileEl.value = '';
+});
+$('#fileAdd').addEventListener('change', () => {
+  if (!$('#fileAdd').files || !$('#fileAdd').files.length) return;
+  addSources(Array.from($('#fileAdd').files));   // а эта кнопка — дописывает
+  $('#fileAdd').value = '';
+});
+$('#btnAddFiles').addEventListener('click', () => $('#fileAdd').click());
 
 ['dragenter','dragover'].forEach(ev => dropEl.addEventListener(ev, e => {
   e.preventDefault(); e.stopPropagation(); dropEl.classList.add('over');
@@ -664,8 +712,11 @@ fileEl.addEventListener('change', () => { if (fileEl.files && fileEl.files[0]) l
 dropEl.addEventListener('drop', e => {
   const dt = e.dataTransfer;
   if (!dt) return;
-  const f = dt.files && dt.files[0];
-  if (f){ loadFile(f); return; }
+  if (dt.files && dt.files.length){
+    dropAllSources();
+    addSources(Array.from(dt.files));
+    return;
+  }
   // если перетащили не файл, а ссылку из другой вкладки
   const link = (dt.getData('text/uri-list') || dt.getData('text/plain') || '')
     .split(/[\r\n]+/).map(s => s.trim()).filter(Boolean)[0];
@@ -855,36 +906,184 @@ document.addEventListener('paste', e => {
   }
 });
 
+/* Ждём, пока плеер сообщит про открытый файл. Возвращает false, если не
+   открылось: битый контейнер, неподдерживаемый кодек и тому подобное. */
+function waitMeta(ms){
+  return new Promise(res => {
+    let done = false;
+    const finish = ok => {
+      if (done) return;
+      done = true;
+      video.removeEventListener('loadedmetadata', okH);
+      video.removeEventListener('error', errH);
+      res(ok);
+    };
+    const okH = () => finish(true), errH = () => finish(false);
+    video.addEventListener('loadedmetadata', okH);
+    video.addEventListener('error', errH);
+    setTimeout(() => finish(false), ms || 30000);
+  });
+}
+
+/* Переключить плеер на другой загруженный файл. */
+async function useSource(i, analyze){
+  if (i < 0 || i >= S.sources.length) return false;
+  const s = S.sources[i];
+  S.srcIndex = i;
+  if (video.getAttribute('src') !== s.url){
+    S.playingClip = false;
+    video.pause();
+    video.src = s.url;
+    try { video.load(); } catch(e){}
+    const ok = await waitMeta();
+    if (!ok) return false;
+  }
+  await readMeta(s);
+  if (!s.hasVideoTrack) return false;
+  enableTools();
+  if (analyze && !s.analyzed){
+    s.analyzed = true;
+    await detectBlackBars();
+    await analyzeWholeVideo();
+  }
+  applyCropUi();
+  resizePreview();
+  drawWave();
+  drawPreview();
+  renderSources();
+  return true;
+}
+
+/* Добавить файлы. Каждый по очереди открывается, разбирается и остаётся
+   в списке источников — так можно скормить хоть весь сезон. */
+async function addSources(files){
+  const list = Array.from(files || []).filter(Boolean);
+  if (!list.length) return;
+  if (S.busy){ banner('busy','warn','Дождитесь окончания текущей операции.'); return; }
+  dropBanner('playback'); dropBanner('autoplay'); dropBanner('nocodec'); dropBanner('src');
+
+  S.busy = true;
+  if (window.__SVM) window.__SVM.ready = false;   // пока грузим — не готово
+  const bad = [];
+  try {
+    for (let k = 0; k < list.length; k++){
+      const f = list[k];
+      const type = f.type || '';
+      if (list.length === 1 && (!type || video.canPlayType(type) === '')){
+        banner('nocodec','warn',
+          '<b>Возможно, браузер не воспроизведёт этот файл.</b> ' +
+          (type ? 'Тип «' + esc(type) + '» не заявлен как поддерживаемый. ' : 'Тип файла не определён. ') +
+          'Формат MKV и экзотические кодеки чаще всего не открываются. Если видео не появится — перекодируйте его в MP4 (H.264 + AAC).');
+      }
+      const s = makeSource(f, URL.createObjectURL(f));
+      S.sources.push(s);
+      renderSources();
+      if (list.length > 1){
+        setSrcStatus('Разбираю файл ' + (k + 1) + ' из ' + list.length + ': ' + f.name);
+      }
+      const ok = await useSource(S.sources.length - 1, true);
+      if (!ok){
+        bad.push(f.name);
+        try { URL.revokeObjectURL(s.url); } catch(e){}
+        S.sources.pop();
+        renderSources();
+      }
+    }
+  } finally {
+    S.busy = false;
+    setSrcStatus('');
+  }
+
+  if (bad.length){
+    banner('src','err','<b>Не открылись:</b> ' + esc(bad.join(', ')) +
+      '. Скорее всего, браузер не умеет их контейнер или кодек — перекодируйте в MP4 (H.264 + AAC).');
+  }
+  if (!S.sources.length) return;
+
+  // клипы делаем только если их ещё нет — чтобы добавление файла не стирало работу
+  if (!S.clips.length){
+    await useSource(0, false);
+    const s = S.sources[0];
+    S.clips = [makeClip(0, Math.min(s.duration, 30) || s.duration)];
+    S.active = 0;
+    undoStack.length = 0; redoStack.length = 0; refreshUndoUi();
+    syncClipUi();
+  } else {
+    renderClips();
+  }
+  if (window.__SVM) window.__SVM.ready = true;
+}
+
+// один файл — прежнее поведение: заменяем всё
 function loadFile(f){
   if (!f) return;
   if (S.busy){ banner('busy','warn','Дождитесь окончания текущей операции.'); return; }
-  dropBanner('playback'); dropBanner('autoplay'); dropBanner('nocodec');
+  dropAllSources();
+  addSources([f]);
+}
 
-  if (S.url){ try { URL.revokeObjectURL(S.url); } catch(e){} }
-  S.file = f;
-  S.url  = URL.createObjectURL(f);
+function dropAllSources(){
+  if (window.__SVM) window.__SVM.ready = false;
   dropClips();
   S.clips = [];
   S.active = 0;
+  S.sources.forEach(s => { try { URL.revokeObjectURL(s.url); } catch(e){} });
+  S.sources = [];
+  S.srcIndex = 0;
   renderCues();
   renderClips();
-
-  const type = f.type || '';
-  const can  = type ? video.canPlayType(type) : '';
-  if (!type || can === ''){
-    banner('nocodec','warn',
-      '<b>Возможно, браузер не воспроизведёт этот файл.</b> ' +
-      (type ? 'Тип «' + esc(type) + '» не заявлен как поддерживаемый. ' : 'Тип файла не определён. ') +
-      'Формат MKV и экзотические кодеки чаще всего не открываются. Если видео не появится — перекодируйте его в MP4 (H.264 + AAC).');
-  }
-
-  const info = $('#fileinfo');
-  info.className = 'fileinfo on';
-  info.innerHTML = '📄 <b>' + esc(f.name) + '</b> — ' + fmtSize(f.size) + (type ? ' · ' + esc(type) : '');
-
-  video.src = S.url;
-  try { video.load(); } catch(e){}
+  renderSources();
 }
+
+function setSrcStatus(t){ $('#srcStatus').textContent = t || ''; }
+
+function renderSources(){
+  const box = $('#srcList');
+  const info = $('#fileinfo');
+  if (!S.sources.length){
+    box.innerHTML = '';
+    info.className = 'fileinfo';
+    return;
+  }
+  info.className = 'fileinfo on';
+  if (S.sources.length === 1){
+    const s = S.sources[0];
+    info.innerHTML = '📄 <b>' + esc(s.name) + '</b> — ' + fmtSize(s.file.size) +
+      (s.duration ? ' · ' + s.vw + '×' + s.vh + ' · ' + fmtTime(s.duration) : '');
+    box.innerHTML = '';
+    return;
+  }
+  const total = S.sources.reduce((a, s) => a + (s.duration || 0), 0);
+  info.innerHTML = '📄 Файлов: <b>' + S.sources.length + '</b> · всего ' + fmtTime(total);
+  box.innerHTML = S.sources.map((s, i) =>
+    '<div class="srcitem' + (i === S.srcIndex ? ' on' : '') + '" data-i="' + i + '">' +
+      '<span class="nm">' + esc(s.name) + '</span>' +
+      '<span class="dur">' + (s.duration ? fmtTime(s.duration) : '…') + '</span>' +
+      '<button class="del" data-a="delsrc" title="Убрать файл">✕</button>' +
+    '</div>').join('');
+}
+
+$('#srcList').addEventListener('click', async e => {
+  const row = e.target.closest('.srcitem');
+  if (!row) return;
+  if (S.busy){ banner('busy','warn','Дождитесь окончания текущей операции.'); return; }
+  const i = +row.dataset.i;
+  if (e.target.dataset.a === 'delsrc'){
+    const s = S.sources[i];
+    if (S.clips.some(c => c.srcId === s.id)){
+      banner('src','warn','Сначала удалите клипы, вырезанные из этого файла.');
+      return;
+    }
+    try { URL.revokeObjectURL(s.url); } catch(err){}
+    S.sources.splice(i, 1);
+    S.srcIndex = clamp(S.srcIndex > i ? S.srcIndex - 1 : S.srcIndex, 0, Math.max(0, S.sources.length - 1));
+    if (S.sources.length) await useSource(S.srcIndex, false);
+    else dropAllSources();
+    renderSources();
+    return;
+  }
+  await useSource(i, false);
+});
 
 video.addEventListener('error', () => {
   const codes = {1:'загрузка прервана', 2:'ошибка сети', 3:'ошибка декодирования', 4:'формат не поддерживается браузером'};
@@ -897,9 +1096,8 @@ video.addEventListener('error', () => {
   $('#tools').classList.add('dis');
 });
 
-video.addEventListener('loadedmetadata', onMeta);
-
-async function onMeta(){
+/* Считать характеристики открытого файла в его запись. */
+async function readMeta(s){
   // некоторые WebM отдают Infinity — «прогреваем» длительность перемоткой
   if (!isFinite(video.duration)){
     await new Promise(res => {
@@ -911,41 +1109,28 @@ async function onMeta(){
     });
     try { video.currentTime = 0; } catch(e){}
   }
-
-  S.duration = isFinite(video.duration) ? video.duration : 0;
-  S.vw = video.videoWidth  || 0;
-  S.vh = video.videoHeight || 0;
-  S.hasVideoTrack = S.vw > 0 && S.vh > 0;
-
-  if (!S.hasVideoTrack){
-    banner('playback','err','<b>В файле не найдена видеодорожка</b> (или браузер не смог её декодировать). Попробуйте другой файл или перекодируйте его в MP4.');
-    return;
+  s.duration = isFinite(video.duration) ? video.duration : 0;
+  s.vw = video.videoWidth  || 0;
+  s.vh = video.videoHeight || 0;
+  s.hasVideoTrack = s.vw > 0 && s.vh > 0;
+  s.ready = s.hasVideoTrack;
+  if (!s.hasVideoTrack){
+    banner('playback','err','<b>В файле «' + esc(s.name) + '» не найдена видеодорожка</b> ' +
+      '(или браузер не смог её декодировать). Попробуйте другой файл или перекодируйте его в MP4.');
+  } else {
+    dropBanner('playback');
   }
-  dropBanner('playback');
+}
 
-  dropClips();
-  S.clips = [makeClip(0, Math.min(S.duration, 30) || S.duration)];
-  S.active = 0;
-
+function enableTools(){
   const seek = $('#seek');
-  seek.min = 0; seek.max = String(S.duration || 1); seek.step = '0.001'; seek.value = '0';
+  seek.min = 0; seek.max = String(S.duration || 1); seek.step = '0.001';
   seek.disabled = false;
   $('#btnPlay').disabled = false;
   $('#btnClip').disabled = false;
   $('#tools').classList.remove('dis');
   $('#spTarget').value = String(Math.min(45, Math.max(10, Math.round(S.duration / 6))));
-
-  undoStack.length = 0; redoStack.length = 0; refreshUndoUi();
-  syncClipUi();
-  resizePreview();
-  drawPreview();
   startLoop();
-  applyCropUi();
-  detectBlackBars();                          // вшитые чёрные поля — в фоне
-  analyzeWholeVideo();                        // волна и паузы — тоже
-
-  $('#fileinfo').innerHTML += ' · ' + S.vw + '×' + S.vh + ' · ' + fmtTime(S.duration);
-  if (window.__SVM) window.__SVM.ready = true;
 }
 
 /* ---------------------------- размеры вывода ----------------------------- */
@@ -1308,7 +1493,8 @@ $('#inEnd')  .addEventListener('change', e => setTrim(S.start, parseFloat(e.targ
    по которой видно, где речь, и точки пауз, по которым можно резать так,
    чтобы фраза не обрывалась на середине.                                 */
 const WAVE_HZ = 50;                                // кадров огибающей в секунду
-let waveData = null;                               // { env, hz, floor, speech, pauses }
+/* Разбор звука лежит в самом источнике: S.wave — это разбор того файла,
+   который сейчас открыт. У каждого файла он свой. */
 
 function findPauses(env, hz, floor, speech){
   const thr = floor + 0.22 * Math.max(1e-6, speech - floor);
@@ -1426,7 +1612,7 @@ async function detectBlackBars(){
 }
 
 async function analyzeWholeVideo(){
-  waveData = null;
+  S.wave = null;
   drawWave();
   if (!S.hasVideoTrack) return;
   const note = $('#waveNote');
@@ -1453,8 +1639,8 @@ async function analyzeWholeVideo(){
   const pick = q => sorted[clamp(Math.floor(sorted.length * q), 0, sorted.length - 1)] || 0;
   const floor = pick(0.10), speech = pick(0.85);
   const pauses = findPauses(env, WAVE_HZ, floor, speech);
-  waveData = { env, hz: WAVE_HZ, floor, speech, pauses, channels: ch };
-  autoIndex = null;                             // пересчитается при подборе
+  S.wave = { env, hz: WAVE_HZ, floor, speech, pauses, channels: ch };
+  if (src()) src().autoIx = null;               // пересчитается при подборе
   note.textContent = 'Звук разобран: пауз в речи найдено ' + pauses.length +
     ' — по ним и будет резать.';
   drawWave();
@@ -1470,9 +1656,9 @@ function drawWave(){
   const x = c.getContext('2d');
   x.setTransform(dpr, 0, 0, dpr, 0, 0);
   x.clearRect(0, 0, W, H);
-  if (!waveData || !S.duration) return;
+  if (!S.wave || !S.duration) return;
 
-  const { env, hz, floor, speech } = waveData;
+  const { env, hz, floor, speech } = S.wave;
   const mid = H / 2;
   const scale = Math.max(1e-6, speech * 1.35);
   x.fillStyle = 'rgba(167,139,250,0.34)';
@@ -1487,7 +1673,7 @@ function drawWave(){
   }
   // паузы — светлые полоски по нижней кромке
   x.fillStyle = 'rgba(52,211,153,0.5)';
-  for (const p of waveData.pauses){
+  for (const p of S.wave.pauses){
     const px = p.a / S.duration * W, w = Math.max(1, (p.b - p.a) / S.duration * W);
     x.fillRect(px, H - 3, w, 3);
   }
@@ -1560,10 +1746,20 @@ function syncClipUi(){
   drawPreview();
 }
 
-function selectClip(i){
+/* Клип может быть вырезан из другого файла — тогда подменяем видео. */
+async function ensureClipSource(c){
+  c = c || cur();
+  if (!c || !c.srcId) return true;
+  const i = S.sources.findIndex(s => s.id === c.srcId);
+  if (i < 0 || i === S.srcIndex) return true;
+  return await useSource(i, false);
+}
+
+async function selectClip(i){
   if (i < 0 || i >= S.clips.length || i === S.active) return;
   S.playingClip = false;
   S.active = i;
+  await ensureClipSource(S.clips[i]);
   syncClipUi();
   try { video.currentTime = S.clips[i].start; } catch(e){}
 }
@@ -1581,12 +1777,15 @@ function renderClips(){
     const subs = c.cues.length ? c.cues.length + ' реплик, ' + words + ' слов' : 'без субтитров';
     const done = c.out ? 'готов ' + fmtSize(c.out.size) + ' · ' : '';
     const why = c.why ? '<b style="color:var(--acc)">' + esc(c.why) + '</b> · ' : '';
+    const from = S.sources.length > 1
+      ? (() => { const s = S.sources.find(x => x.id === c.srcId); return s ? esc(s.name) + ' · ' : ''; })()
+      : '';
     html += '<div class="clip' + (i === S.active ? ' on' : '') + '" data-i="' + i + '">' +
       '<div class="num">' + (i + 1) + '</div>' +
       '<div class="meta">' +
         '<div class="when"><span class="dot ' + (c.out ? 'ready' : '') + '"></span>' +
           fmtTime(c.start) + ' → ' + fmtTime(c.end) + ' · ' + (c.end - c.start).toFixed(1) + ' с</div>' +
-        '<div class="sub">' + why + done + esc(subs) + '</div>' +
+        '<div class="sub">' + from + why + done + esc(subs) + '</div>' +
       '</div>' +
       '<div class="acts">' +
         (c.out ? '<a href="' + c.out.url + '" download="' + esc(c.out.name) + '" title="Скачать клип">⬇</a>' : '') +
@@ -1669,11 +1868,10 @@ $('#btnAddClip').addEventListener('click', () => {
    (рваность — это смех, реакции, перебивки). Дальше берём лучшие окна,
    не пересекающиеся между собой, и подтягиваем их границы к паузам.
    Это оценка по звуку, а не понимание смысла — так и написано в интерфейсе. */
-let autoIndex = null;
-
-function buildAutoIndex(){
-  if (!waveData) return null;
-  const { env, hz, floor, speech } = waveData;
+function buildAutoIndex(wave){
+  wave = wave || S.wave;
+  if (!wave) return null;
+  const { env, hz, floor, speech } = wave;
   const n = env.length;
   const speechThr = floor + 0.35 * Math.max(1e-6, speech - floor);
   const hi = floor + 0.65 * Math.max(1e-6, speech - floor);
@@ -1723,51 +1921,72 @@ function whyLabel(m){
 }
 
 /* Подтягиваем границу к ближайшей паузе, чтобы фраза не оборвалась. */
-function snapToPause(t, limit){
-  if (!waveData || !waveData.pauses.length) return t;
+function snapToPause(t, limit, wave){
+  wave = wave || S.wave;
+  if (!wave || !wave.pauses.length) return t;
   let best = t, dist = limit || 3;
-  for (const p of waveData.pauses){
+  for (const p of wave.pauses){
     const d = Math.abs(p.mid - t);
     if (d < dist){ dist = d; best = p.mid; }
   }
   return best;
 }
 
-function autoPickClips(count, len, mode){
-  const ix = autoIndex || (autoIndex = buildAutoIndex());
+/* Кандидаты внутри одного источника — все окна с их оценкой. */
+function candidatesIn(source, len, mode){
+  if (!source || !source.wave || !source.duration) return [];
+  const ix = source.autoIx || (source.autoIx = buildAutoIndex(source.wave));
   if (!ix) return [];
-  const D = S.duration;
-  if (D < len) return [[0, D, { speechFrac: 1, energy: 1, burstsPerSec: 0 }]];
-
+  const D = source.duration;
+  if (D < len){
+    return [{ src: source, a: 0, b: D, m: { speechFrac: 1, energy: 1, burstsPerSec: 0 }, s: 0.5 }];
+  }
   const step = Math.max(1, len / 6);
-  const cands = [];
+  const out = [];
   for (let a = 0; a + len <= D + 0.01; a += step){
     const m = scoreWindow(ix, a, a + len);
-    cands.push({ a, b: a + len, m, s: weighted(m, mode) });
-  }
-  cands.sort((x, y) => y.s - x.s);
-
-  const picked = [];
-  const GAP = Math.max(2, len * 0.15);
-  for (const c of cands){
-    if (picked.length >= count) break;
-    if (picked.some(p => c.a < p.b + GAP && c.b > p.a - GAP)) continue;
-    picked.push(c);
-  }
-  picked.sort((x, y) => x.a - y.a);
-
-  // границы — к паузам, но не наезжая на соседей
-  const out = [];
-  for (let i = 0; i < picked.length; i++){
-    const p = picked[i];
-    let a = snapToPause(p.a, Math.min(3, len * 0.12));
-    let b = snapToPause(p.b, Math.min(3, len * 0.12));
-    const prevEnd = out.length ? out[out.length - 1][1] : 0;
-    a = clamp(a, prevEnd, D - 1);
-    b = clamp(b, a + Math.max(3, len * 0.4), D);
-    out.push([a, b, p.m]);
+    out.push({ src: source, a, b: a + len, m, s: weighted(m, mode) });
   }
   return out;
+}
+
+/* Лучшие места сразу по всем загруженным файлам: кандидаты со всех
+   источников соревнуются в одном списке, поэтому если одна серия живее
+   остальных, оттуда и возьмётся больше кусков. */
+function autoPickAll(count, len, mode, sources){
+  const list = (sources || S.sources).filter(s => s.wave && s.duration);
+  if (!list.length) return [];
+  let cands = [];
+  for (const s of list) cands = cands.concat(candidatesIn(s, len, mode));
+  cands.sort((x, y) => y.s - x.s);
+
+  const GAP = Math.max(2, len * 0.15);
+  const picked = [];
+  for (const c of cands){
+    if (picked.length >= count) break;
+    if (picked.some(p => p.src === c.src && c.a < p.b + GAP && c.b > p.a - GAP)) continue;
+    picked.push(c);
+  }
+  picked.sort((x, y) => (S.sources.indexOf(x.src) - S.sources.indexOf(y.src)) || (x.a - y.a));
+
+  // границы — к паузам своего источника, не наезжая на соседей из того же файла
+  const out = [];
+  for (const p of picked){
+    const lim = Math.min(3, len * 0.12);
+    let a = snapToPause(p.a, lim, p.src.wave);
+    let b = snapToPause(p.b, lim, p.src.wave);
+    const prev = out.filter(o => o.src === p.src).pop();
+    a = clamp(a, prev ? prev.b : 0, p.src.duration - 1);
+    b = clamp(b, a + Math.max(3, len * 0.4), p.src.duration);
+    out.push({ src: p.src, a, b, m: p.m });
+  }
+  return out;
+}
+
+/* Совместимость со старым вызовом: подбор внутри текущего файла. */
+function autoPickClips(count, len, mode){
+  return autoPickAll(count, len, mode, src() ? [src()] : [])
+    .map(p => [p.a, p.b, p.m]);
 }
 
 $('#btnAuto').addEventListener('click', () => {
@@ -1783,7 +2002,7 @@ function updateAutoHint(){
   const base = 'Приложение оценивает звук: где больше речи, где громче и живее, ' +
     'где похоже на смех. Это подсказка по звуку, а не понимание смысла — ' +
     'итог всё равно стоит просмотреть.';
-  $('#autoHint').innerHTML = waveData
+  $('#autoHint').innerHTML = S.wave
     ? base
     : '<span style="color:var(--warn)">Звук ещё разбирается — подождите пару секунд.</span> ' + base;
 }
@@ -1791,7 +2010,7 @@ function updateAutoHint(){
 $('#btnAutoGo').addEventListener('click', async () => {
   if (S.busy){ banner('busy','warn','Дождитесь окончания текущей операции.'); return; }
   if (!S.duration) return;
-  if (!waveData){
+  if (!S.wave){
     banner('auto','warn','<b>Звук ещё не разобран.</b> Подождите пару секунд — ' +
       'без него выбирать не по чему. Если разбор не удался, воспользуйтесь ' +
       '«✂ Нарезать всё подряд».');
@@ -1801,22 +2020,25 @@ $('#btnAutoGo').addEventListener('click', async () => {
   const len = clamp(parseFloat($('#auLen').value) || 45, 5, 300);
   const mode = $('#auMode').value;
 
-  const picks = autoPickClips(count, len, mode);
+  const picks = autoPickAll(count, len, mode);
   if (!picks.length){
     banner('auto','warn','Не нашлось подходящих мест — попробуйте другую длину.');
     return;
   }
   pushUndo();
-  S.clips = picks.map(([a, b, m]) => {
-    const c = makeClip(a, b);
-    c.why = whyLabel(m);
+  S.clips = picks.map(p => {
+    const c = makeClip(p.a, p.b, p.src.id);
+    c.why = whyLabel(p.m);
     return c;
   });
   S.active = 0;
   $('#autoBox').classList.remove('on');
+  await ensureClipSource(S.clips[0]);
   syncClipUi();
   try { video.currentTime = S.clips[0].start; } catch(e){}
-  banner('auto','ok','<b>Выбрано ' + picks.length + ' моментов.</b> ' +
+  const files = new Set(picks.map(p => p.src.id)).size;
+  banner('auto','ok','<b>Выбрано ' + picks.length + ' моментов' +
+    (S.sources.length > 1 ? ' из ' + files + ' файлов' : '') + '.</b> ' +
     'Рядом с каждым написано, чем он приглянулся. Послушайте их кнопкой ▶ и ' +
     'поправьте границы, где нужно — выбор сделан по звуку, а не по смыслу.');
   setTimeout(() => dropBanner('auto'), 12000);
@@ -1838,7 +2060,7 @@ $('#btnSplitCancel').addEventListener('click', () => $('#splitBox').classList.re
 function splitPlan(target, mn, mx, byPause){
   const D = S.duration;
   const parts = [];
-  const pauses = (byPause && waveData) ? waveData.pauses : null;
+  const pauses = (byPause && S.wave) ? S.wave.pauses : null;
   let pos = 0, guard = 0;
   while (D - pos > 0.05 && guard++ < 10000){
     if (D - pos <= mx){ parts.push([pos, D]); break; }
@@ -1896,7 +2118,7 @@ function updateSplitHint(){
   let text = 'Получится примерно <b>' + n + '</b> ' +
     (n % 10 === 1 && n % 100 !== 11 ? 'клип' : [2,3,4].indexOf(n % 10) >= 0 && [12,13,14].indexOf(n % 100) < 0 ? 'клипа' : 'клипов') +
     '. ' + (byPause
-      ? (waveData ? 'Границы встанут в паузах речи (найдено ' + waveData.pauses.length + ').'
+      ? (S.wave ? 'Границы встанут в паузах речи (найдено ' + S.wave.pauses.length + ').'
                   : 'Звук ещё разбирается — пока границы будут по времени.')
       : 'Границы встанут строго по времени.') +
     ' Их потом можно двигать вручную.';
@@ -2706,6 +2928,7 @@ async function runAsr(indices){
       const i = indices[k];
       if (S.clips[i].end - S.clips[i].start < 0.3){ failed++; continue; }
       S.active = i;
+      await ensureClipSource(S.clips[i]);        // клип мог быть из другого файла
       syncClipUi();
       const prefix = indices.length > 1 ? 'Клип ' + (i + 1) + ' из ' + S.clips.length + ': ' : '';
       const res = await asrActiveClip(prefix);
@@ -3223,6 +3446,7 @@ async function doExport(){
   let g = null, dest = null, rec = null, raf = 0, savedMon = 1;
 
   try {
+    await ensureClipSource();                 // клип мог быть вырезан из другого файла
     if (!encoderWarm){
       setExpStatus('Прогреваю кодировщик — секунду…');
       await warmUpEncoder(W, H, pickMime($('#chkMp4').checked));
@@ -3523,12 +3747,22 @@ window.__SVM = {
   selectClip, splitPlan, zipStore, crc32, syncClipUi,
   undo, redo, pushUndo, findPauses, analyzeWholeVideo, drawWave,
   loadFromUrl, looksLikeUrl,
-  autoPickClips, buildAutoIndex, scoreWindow, whyLabel, snapToPause,
+  autoPickClips, autoPickAll, buildAutoIndex, scoreWindow, whyLabel, snapToPause,
+  useSource, addSources, ensureClipSource, dropAllSources,
   clipReasons(){ return S.clips.map(c => c.why || null); },
-  wave(){ return waveData ? { pauses: waveData.pauses.length, hz: waveData.hz,
-                              floor: +waveData.floor.toFixed(5),
-                              speech: +waveData.speech.toFixed(5),
-                              frames: waveData.env.length } : null; },
+  sources(){ return S.sources.map((s, i) => ({
+    n: i + 1, name: s.name, dur: +(s.duration || 0).toFixed(2),
+    w: s.vw, h: s.vh, active: i === S.srcIndex,
+    analyzed: !!s.analyzed, pauses: s.wave ? s.wave.pauses.length : null
+  })); },
+  clipSources(){ return S.clips.map(c => {
+    const s = S.sources.find(x => x.id === c.srcId);
+    return s ? s.name : null;
+  }); },
+  wave(){ return S.wave ? { pauses: S.wave.pauses.length, hz: S.wave.hz,
+                              floor: +S.wave.floor.toFixed(5),
+                              speech: +S.wave.speech.toFixed(5),
+                              frames: S.wave.env.length } : null; },
   undoDepth(){ return { undo: undoStack.length, redo: redoStack.length }; },
   analyzeAudio, levelBetween, classifySound, cleanWords, dropJunkCues,
   addSoundCues, nonSpeechTag, isJunk, segmentAudio, decodeWholeAudio, sliceMono,
