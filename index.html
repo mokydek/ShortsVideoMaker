@@ -1616,30 +1616,32 @@ async function analyzeWholeVideo(){
   drawWave();
   if (!S.hasVideoTrack) return;
   const note = $('#waveNote');
-  note.textContent = 'Разбираю звук, чтобы показать волну и резать по паузам…';
-  const buf = await decodeWholeAudio(null);
-  if (!buf){
+  const big = S.file && S.file.size > 400 * 1024 * 1024;
+  note.textContent = big
+    ? 'Разбираю звук — файл большой (' + fmtSize(S.file.size) + '), это займёт время…'
+    : 'Разбираю звук, чтобы показать волну и резать по паузам…';
+  const dec = await decodeWholeAudio(null);
+  if (!dec){
     note.innerHTML = 'Волна недоступна: звук не удалось разобрать целиком' +
       (asrDiag.decode ? ' (' + esc(String(asrDiag.decode)) + ')' : '') +
       '. Нарезка будет по времени, всё остальное работает.';
     return;
   }
-  const sr = buf.sampleRate || SR;
+  const sr = dec.sr || SR;
   const frame = Math.max(1, Math.round(sr / WAVE_HZ));
-  const n = Math.floor(buf.length / frame);
-  const ch = Math.max(1, buf.numberOfChannels);
-  const data = buf.getChannelData(0);
+  const n = Math.floor(dec.pcm.length / frame);
   const env = new Float32Array(n);
   for (let i = 0; i < n; i++){
     let s = 0;
-    for (let j = 0; j < frame; j++){ const v = data[i * frame + j] || 0; s += v * v; }
+    const base = i * frame;
+    for (let j = 0; j < frame; j++){ const v = dec.pcm[base + j] / 32768; s += v * v; }
     env[i] = Math.sqrt(s / frame);
   }
   const sorted = Array.from(env).sort((a, b) => a - b);
   const pick = q => sorted[clamp(Math.floor(sorted.length * q), 0, sorted.length - 1)] || 0;
   const floor = pick(0.10), speech = pick(0.85);
   const pauses = findPauses(env, WAVE_HZ, floor, speech);
-  S.wave = { env, hz: WAVE_HZ, floor, speech, pauses, channels: ch };
+  S.wave = { env, hz: WAVE_HZ, floor, speech, pauses };
   if (src()) src().autoIx = null;               // пересчитается при подборе
   note.textContent = 'Звук разобран: пауз в речи найдено ' + pauses.length +
     ' — по ним и будет резать.';
@@ -2423,56 +2425,78 @@ async function makeCapture(actx, onChunk){
    загруженной машине роняет куски звука, и распознавание начинает врать.
    Работает не всегда: у больших файлов не хватит памяти, а экзотический
    контейнер браузер может не разобрать — на этот случай остаётся захват. */
-const DECODE_MAX_BYTES = 300 * 1024 * 1024;
-const DECODE_MAX_DUR = 40 * 60;
-let decodedAudio = null;                      // { key, buf }
+const DECODE_MAX_BYTES = 2 * 1024 * 1024 * 1024;   // 2 ГБ
+const DECODE_MAX_DUR = 3 * 3600;                   // 3 часа
+let decodedAudio = null;                      // { key, pcm, sr }
+
+const to16 = v => v < -1 ? -32768 : v > 1 ? 32767 : Math.round(v * 32767);
 
 async function decodeWholeAudio(onProgress){
   if (!S.file) return null;
-  if (S.file.size > DECODE_MAX_BYTES || S.duration > DECODE_MAX_DUR){
-    asrDiag.decode = 'файл слишком большой для разбора целиком';
+  if (S.file.size > DECODE_MAX_BYTES){
+    asrDiag.decode = 'файл больше ' + fmtSize(DECODE_MAX_BYTES);
+    return null;
+  }
+  if (S.duration > DECODE_MAX_DUR){
+    asrDiag.decode = 'дольше ' + Math.round(DECODE_MAX_DUR / 3600) + ' часов';
     return null;
   }
   const key = S.file.name + '|' + S.file.size;
-  if (decodedAudio && decodedAudio.key === key) return decodedAudio.buf;
+  if (decodedAudio && decodedAudio.key === key) return decodedAudio;
   const OC = window.OfflineAudioContext || window.webkitOfflineAudioContext;
   if (!OC){ asrDiag.decode = 'OfflineAudioContext недоступен'; return null; }
+
+  // предыдущий разбор освобождаем до чтения нового: иначе на больших
+  // файлах в памяти окажутся оба сразу
+  decodedAudio = null;
   try {
-    onProgress && onProgress(0.15);
+    onProgress && onProgress(0.1);
     const ab = await S.file.arrayBuffer();
-    onProgress && onProgress(0.45);
+    onProgress && onProgress(0.4);
     const oc = new OC(1, 1, SR);              // декодирует сразу в 16 кГц
-    const buf = await oc.decodeAudioData(ab);
-    decodedAudio = { key, buf };
+    const buf = await oc.decodeAudioData(ab); // ab при этом освобождается
+    onProgress && onProgress(0.8);
+
+    /* Сводим в моно и храним 16-битным. У трёхчасового фильма это 345 МБ
+       вместо 1,4 ГБ, а распознаванию точности хватает с большим запасом:
+       Whisper всё равно работает с моно 16 кГц.                          */
+    const n = buf.length, ch = Math.max(1, buf.numberOfChannels);
+    const pcm = new Int16Array(n);
+    if (ch === 1){
+      const d = buf.getChannelData(0);
+      for (let i = 0; i < n; i++) pcm[i] = to16(d[i]);
+    } else {
+      const a = buf.getChannelData(0), b = buf.getChannelData(1);
+      for (let i = 0; i < n; i++) pcm[i] = to16((a[i] + b[i]) * 0.5);
+    }
+    decodedAudio = { key, pcm, sr: buf.sampleRate || SR };
     asrDiag.decode = 'ok';
-    return buf;
+    asrDiag.decodeMb = +(pcm.length * 2 / 1048576).toFixed(1);
+    return decodedAudio;
   } catch(err){
-    asrDiag.decode = String(err && err.message || err);
+    decodedAudio = null;
+    const msg = String(err && err.message || err);
+    asrDiag.decode = /allocat|memory|RangeError|Array buffer/i.test(msg)
+      ? 'не хватило памяти на файл целиком' : msg;
     return null;
   }
 }
 
-function sliceMono(buf, a, b){
-  const sr = buf.sampleRate || SR;
-  const i0 = clamp(Math.floor(a * sr), 0, buf.length);
-  const i1 = clamp(Math.ceil(b * sr), i0 + 1, buf.length);
-  const n = i1 - i0;
-  const out = new Float32Array(n);
-  const ch = Math.max(1, buf.numberOfChannels);
-  for (let c = 0; c < ch; c++){
-    const d = buf.getChannelData(c);
-    for (let i = 0; i < n; i++) out[i] += d[i0 + i] / ch;
-  }
+function sliceMono(dec, a, b){
+  const sr = dec.sr || SR;
+  const i0 = clamp(Math.floor(a * sr), 0, dec.pcm.length);
+  const i1 = clamp(Math.ceil(b * sr), i0 + 1, dec.pcm.length);
+  const out = new Float32Array(i1 - i0);
+  for (let i = 0; i < out.length; i++) out[i] = dec.pcm[i0 + i] / 32768;
   return out;
 }
 
 async function segmentAudio(onProgress){
-  const buf = await decodeWholeAudio(onProgress);
-  if (buf){
+  const dec = await decodeWholeAudio(onProgress);
+  if (dec){
     onProgress && onProgress(1);
-    const mono = sliceMono(buf, S.start, S.end);
-    const sr = buf.sampleRate || SR;
-    return { audio: sr === SR ? mono : await resampleTo16k(mono, sr), fast: true };
+    const mono = sliceMono(dec, S.start, S.end);
+    return { audio: dec.sr === SR ? mono : await resampleTo16k(mono, dec.sr), fast: true };
   }
   return { audio: await captureSegmentAudio(onProgress), fast: false };
 }
