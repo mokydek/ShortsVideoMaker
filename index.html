@@ -531,8 +531,41 @@ footer a{color:var(--acc)}
       <label class="chk" style="margin-top:10px"><input type="checkbox" id="chkMp4" checked> Предпочитать MP4 (если браузер умеет)</label>
       <div class="row" style="margin-top:11px">
         <button id="btnExport" class="primary">🎬 Этот клип</button>
-        <button id="btnExportAll" class="primary">🎬 Все клипы</button>
+        <button id="btnExportAll" class="primary">🎬 Все по отдельности</button>
+        <button id="btnMontage" class="primary">🎞 Склеить в один</button>
         <button id="btnExportStop" class="ghost" style="flex:0 0 auto;display:none">Остановить</button>
+      </div>
+      <div id="mntBox" class="splitbox">
+        <div class="grid3">
+          <div>
+            <label class="f" for="mntTr">Переход между клипами</label>
+            <select id="mntTr">
+              <option value="dissolve" selected>Наплыв</option>
+              <option value="fade">Затемнение</option>
+              <option value="flash">Вспышка</option>
+              <option value="none">Без перехода</option>
+            </select>
+          </div>
+          <div>
+            <label class="f" for="mntFx">Движение в кадре</label>
+            <select id="mntFx">
+              <option value="none">Нет</option>
+              <option value="zoom" selected>Плавный наезд</option>
+              <option value="punch">Толчок в начале</option>
+              <option value="alt">Чередовать</option>
+            </select>
+          </div>
+          <div>
+            <label class="f" for="mntDur">Длина перехода — <span id="mntDurVal">0.4 с</span></label>
+            <input type="range" id="mntDur" min="0.1" max="1.2" step="0.05" value="0.4">
+          </div>
+        </div>
+        <label class="chk" style="margin-top:10px"><input type="checkbox" id="mntAudio" checked> Оставить звук из клипов <span class="hint" style="margin:0">— снимите, если поверх будет своя музыка</span></label>
+        <div class="row" style="margin-top:10px">
+          <button id="btnMontageGo" class="primary">Склеить</button>
+          <button id="btnMontageCancel" class="ghost" style="flex:0 0 auto">Отмена</button>
+        </div>
+        <p class="hint" id="mntHint">Клипы пишутся подряд в один файл в том порядке, в каком стоят в списке.</p>
       </div>
       <div class="prog" id="expProg"><i></i></div>
       <div class="status" id="expStatus">Запись идёт в реальном времени: 30 секунд клипа ≈ 30 секунд ожидания. Не сворачивайте вкладку.</div>
@@ -644,6 +677,7 @@ const S = {
   bars: null,                                 // вшитые в исходник чёрные поля
   style: { size: 6.5, pos: 78, color: '#ffffff', active: '#ffd400', box: true, upper: false },
   credit: { on: false, text: '', pos: 'bottom', size: 2.2 },
+  montage: null,                              // готовая склейка всех клипов
   playingClip: false,
   busy: false
 };
@@ -692,9 +726,12 @@ dropEl.addEventListener('keydown', e => {
 fileEl.addEventListener('change', () => {
   if (!fileEl.files || !fileEl.files.length) return;
   const picked = Array.from(fileEl.files);
+  fileEl.value = '';
+  // проверяем занятость ДО сноса состояния, иначе выбор файла во время
+  // записи уничтожил бы источник прямо посреди неё
+  if (S.busy){ banner('busy','warn','Дождитесь окончания текущей операции.'); return; }
   dropAllSources();                 // выбор через кнопку начинает работу заново
   addSources(picked);
-  fileEl.value = '';
 });
 $('#fileAdd').addEventListener('change', () => {
   if (!$('#fileAdd').files || !$('#fileAdd').files.length) return;
@@ -713,6 +750,7 @@ dropEl.addEventListener('drop', e => {
   const dt = e.dataTransfer;
   if (!dt) return;
   if (dt.files && dt.files.length){
+    if (S.busy){ banner('busy','warn','Дождитесь окончания текущей операции.'); return; }
     dropAllSources();
     addSources(Array.from(dt.files));
     return;
@@ -929,17 +967,26 @@ function waitMeta(ms){
 async function useSource(i, analyze){
   if (i < 0 || i >= S.sources.length) return false;
   const s = S.sources[i];
-  S.srcIndex = i;
+  const prev = S.srcIndex;
   if (video.getAttribute('src') !== s.url){
     S.playingClip = false;
     video.pause();
     video.src = s.url;
     try { video.load(); } catch(e){}
     const ok = await waitMeta();
-    if (!ok) return false;
+    if (!ok){
+      // не загрузилось — S.srcIndex НЕ трогаем: иначе состояние «отравится»
+      // и ensureClipSource потом будет считать, что нужный файл уже открыт
+      S.srcIndex = clamp(prev, 0, Math.max(0, S.sources.length - 1));
+      return false;
+    }
+    // метаданные есть, но кадра может ещё не быть — дожидаемся картинки,
+    // иначе следующий же экспорт запишет чёрное
+    await waitFrame(8000);
   }
+  S.srcIndex = i;
   await readMeta(s);
-  if (!s.hasVideoTrack) return false;
+  if (!s.hasVideoTrack){ S.srcIndex = clamp(prev, 0, Math.max(0, S.sources.length - 1)); return false; }
   enableTools();
   if (analyze && !s.analyzed){
     s.analyzed = true;
@@ -1217,6 +1264,19 @@ function drawBlurBackground(ctx, W, H){
   ctx.fillRect(0, 0, W, H);
 }
 
+/* Эффекты монтажа. В обычном режиме всё в нейтральном положении и на
+   отрисовку не влияет; выставляет их только сборщик единого ролика. */
+const FX = { zoom: 1, fade: 0, flash: 0, prev: null, prevAlpha: 0 };
+function resetFx(){
+  FX.zoom = 1; FX.fade = 0; FX.flash = 0; FX.prev = null; FX.prevAlpha = 0;
+}
+function zoomRect(r){
+  const z = FX.zoom;
+  if (!z || Math.abs(z - 1) < 1e-4) return r;
+  const sw = r.sw / z, sh = r.sh / z;
+  return { sx: r.sx + (r.sw - sw) / 2, sy: r.sy + (r.sh - sh) / 2, sw, sh };
+}
+
 function drawFrame(ctx, W, H, tClip, drawSubs){
   ctx.save();
   ctx.fillStyle = '#000';
@@ -1224,7 +1284,7 @@ function drawFrame(ctx, W, H, tClip, drawSubs){
   const ready = S.hasVideoTrack && video.readyState >= 2;
 
   if (S.crop === 'blur'){
-    const c = contentRect();
+    const c = zoomRect(contentRect());
     const scale = Math.min(W / c.sw, H / c.sh);
     const dw = c.sw * scale, dh = c.sh * scale;
     const dx = (W - dw) / 2;
@@ -1238,7 +1298,7 @@ function drawFrame(ctx, W, H, tClip, drawSubs){
       ctx.restore();
     }
   } else {
-    const r = cropRect();
+    const r = zoomRect(cropRect());
     if (ready){
       try { ctx.drawImage(video, r.sx, r.sy, r.sw, r.sh, 0, 0, W, H); } catch(e){}
     }
@@ -1247,6 +1307,26 @@ function drawFrame(ctx, W, H, tClip, drawSubs){
   if (drawSubs !== false){
     drawSubtitles(ctx, W, H, tClip);
     drawCredit(ctx, W, H);
+  }
+
+  // переходы рисуются поверх всего, включая субтитры
+  if (FX.prev && FX.prevAlpha > 0.001){
+    ctx.save();
+    ctx.globalAlpha = clamp(FX.prevAlpha, 0, 1);
+    try { ctx.drawImage(FX.prev, 0, 0, W, H); } catch(e){}
+    ctx.restore();
+  }
+  if (FX.fade > 0.001){
+    ctx.save();
+    ctx.fillStyle = 'rgba(0,0,0,' + clamp(FX.fade, 0, 1).toFixed(3) + ')';
+    ctx.fillRect(0, 0, W, H);
+    ctx.restore();
+  }
+  if (FX.flash > 0.001){
+    ctx.save();
+    ctx.fillStyle = 'rgba(255,255,255,' + clamp(FX.flash, 0, 1).toFixed(3) + ')';
+    ctx.fillRect(0, 0, W, H);
+    ctx.restore();
   }
 }
 
@@ -1452,6 +1532,48 @@ async function safePlay(){
       banner('autoplay','err','<b>Не удалось запустить воспроизведение:</b> ' + esc(err && err.message || err));
     }
     return false;
+  }
+}
+
+/* Дождаться, пока у видео появится ДЕКОДИРОВАННЫЙ кадр, который можно рисовать.
+   Ни loadedmetadata, ни даже seeked этого не гарантируют: метаданные есть, а
+   картинки ещё нет. Если начать запись в этот момент, в клип уедет чёрный кадр —
+   и так до конца, потому что запись идёт в реальном времени. */
+function waitFrame(ms){
+  return new Promise(res => {
+    let done = false;
+    const finish = ok => { if (done) return; done = true; res(ok); };
+    const deadline = performance.now() + (ms || 8000);
+    // requestVideoFrameCallback срабатывает ровно тогда, когда браузер показал
+    // новый кадр — самый точный признак из доступных
+    if (video.requestVideoFrameCallback){
+      try { video.requestVideoFrameCallback(() => finish(true)); } catch(e){}
+    }
+    const poll = () => {
+      if (done) return;
+      if (video.readyState >= 2) return finish(true);
+      if (performance.now() > deadline) return finish(false);
+      setTimeout(poll, 25);
+    };
+    poll();
+  });
+}
+
+/* Полностью ли чёрный кадр на холсте. Смотрим три строки — этого хватает,
+   чтобы отличить «картинки нет» от нормального кадра. */
+function looksBlank(ctx, W, H){
+  try {
+    // строки берём выше зоны субтитров (~78% высоты) и подписи источника:
+    // иначе белый текст на чёрном кадре сойдёт за картинку
+    for (const y of [Math.floor(H * 0.18), Math.floor(H * 0.38), Math.floor(H * 0.58)]){
+      const d = ctx.getImageData(0, y, W, 1).data;
+      for (let i = 0; i < d.length; i += 4 * 8){
+        if (d[i] > 14 || d[i + 1] > 14 || d[i + 2] > 14) return false;
+      }
+    }
+    return true;
+  } catch(e){
+    return false;                             // не смогли посмотреть — не мешаем
   }
 }
 
@@ -1730,8 +1852,23 @@ $('#btnUndo').addEventListener('click', undo);
 $('#btnRedo').addEventListener('click', redo);
 
 /* -------------------------------- клипы ---------------------------------- */
+/* Освободить ссылку на готовый файл. Если его прямо сейчас показывает плеер
+   результата, сначала убираем оттуда: иначе плеер остаётся с мёртвой ссылкой
+   и браузер сыплет в консоль ERR_FILE_NOT_FOUND. */
+function releaseUrl(url){
+  if (!url) return;
+  const outV = $('#outVideo');
+  if (outV && outV.src === url){
+    try { outV.pause(); } catch(e){}
+    outV.removeAttribute('src');
+    try { outV.load(); } catch(e){}
+    $('#result').classList.remove('on');
+  }
+  try { URL.revokeObjectURL(url); } catch(e){}
+}
+
 function dropClips(){
-  S.clips.forEach(c => { if (c.out && c.out.url){ try { URL.revokeObjectURL(c.out.url); } catch(e){} } });
+  S.clips.forEach(c => { if (c.out) releaseUrl(c.out.url); });
 }
 
 function syncClipUi(){
@@ -1815,6 +1952,10 @@ function renderTimelineClips(){
 $('#clipList').addEventListener('click', async e => {
   const row = e.target.closest('.clip');
   if (!row) return;
+  if (e.target.tagName !== 'A' && S.busy){
+    banner('busy','warn','Идёт запись — дождитесь её окончания, иначе клип испортится.');
+    return;
+  }
   const i = +row.dataset.i;
   const act = e.target.dataset.a;
   if (act === 'del'){
@@ -1830,8 +1971,9 @@ $('#clipList').addEventListener('click', async e => {
     if (S.busy) return;
     pushUndo();
     const c = S.clips[i];
-    const copy = makeClip(c.start, c.end);
+    const copy = makeClip(c.start, c.end, c.srcId);   // копия остаётся у своего файла
     copy.pan = c.pan;
+    copy.why = c.why;
     copy.cues = c.cues.map(q => ({ start: q.start, end: q.end, words: q.words.map(w => ({ ...w })) }));
     S.clips.splice(i + 1, 0, copy);
     S.active = i + 1;
@@ -3276,7 +3418,8 @@ let exportAbort = false;
 let queueMode = false;
 let queueStop = false;
 $('#btnExportStop').addEventListener('click', () => {
-  exportAbort = true; queueStop = true; setExpStatus('Останавливаю…');
+  exportAbort = true; queueStop = true; montageStop = true;
+  setExpStatus('Останавливаю…');
 });
 
 function canExport(){
@@ -3338,6 +3481,242 @@ $('#btnExportAll').addEventListener('click', async () => {
     if (done) $('#bulkBox').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   }
 });
+
+/* ===================== склейка клипов в один ролик =======================
+   Пишем все клипы подряд в одну запись. Между клипами MediaRecorder ставится
+   на паузу — тогда перемотка и подмена файла не попадают в результат, и куски
+   стыкуются встык. Переход рисуется поверх кадра, пока запись идёт.        */
+let montageStop = false;
+
+function fxAt(kind, t, dur){
+  if (kind === 'zoom')  return 1 + 0.09 * clamp(t / Math.max(0.1, dur), 0, 1);
+  if (kind === 'punch') return t < 0.35 ? 1.14 - 0.14 * (t / 0.35) : 1;
+  return 1;
+}
+
+$('#btnMontage').addEventListener('click', () => {
+  $('#mntBox').classList.toggle('on');
+  const n = S.clips.length;
+  const total = S.clips.reduce((a, c) => a + (c.end - c.start), 0);
+  $('#mntHint').innerHTML = 'Клипы пишутся подряд в один файл в том порядке, ' +
+    'в каком стоят в списке. Сейчас их <b>' + n + '</b>, суммарно ' +
+    fmtTime(total) + ' — примерно столько же займёт и запись.';
+});
+$('#btnMontageCancel').addEventListener('click', () => $('#mntBox').classList.remove('on'));
+$('#mntDur').addEventListener('input', e => {
+  $('#mntDurVal').textContent = (+e.target.value).toFixed(2).replace(/0$/, '') + ' с';
+});
+
+$('#btnMontageGo').addEventListener('click', async () => {
+  if (!canExport()) return;
+  if (S.clips.length < 1) return;
+  $('#mntBox').classList.remove('on');
+  await doMontage();
+});
+
+async function doMontage(){
+  S.busy = true; montageStop = false; exportAbort = false;
+  $('#btnExport').disabled = true;
+  $('#btnExportAll').disabled = true;
+  $('#btnMontage').disabled = true;
+  $('#btnExportStop').style.display = '';
+  $('#result').classList.remove('on');
+  setExpProg(0);
+
+  const size = outSize();
+  const W = size.W, H = size.H;
+  const fps = parseInt($('#selFps').value, 10) || 30;
+  const canvas = document.createElement('canvas');
+  canvas.width = W; canvas.height = H;
+  const ctx = canvas.getContext('2d', { alpha: false });
+
+  const prevCv = document.createElement('canvas');
+  prevCv.width = W; prevCv.height = H;
+  const prevCtx = prevCv.getContext('2d', { alpha: false });
+
+  const tr = $('#mntTr').value;
+  const fxKind = $('#mntFx').value;
+  const trDur = clamp(parseFloat($('#mntDur').value) || 0.4, 0.05, 2);
+  const keepAudio = $('#mntAudio').checked;
+
+  const list = S.clips.map((_, i) => i);
+  const totalSec = S.clips.reduce((a, c) => a + (c.end - c.start), 0);
+  let doneSec = 0;
+
+  let g = null, dest = null, rec = null, raf = 0, savedMon = 1;
+  const savedActive = S.active;
+
+  try {
+    if (!encoderWarm){
+      setExpStatus('Прогреваю кодировщик — секунду…');
+      await warmUpEncoder(W, H, pickMime($('#chkMp4').checked));
+    }
+    resetFx();
+    const vStream = canvas.captureStream(fps);
+    const tracks = vStream.getVideoTracks().slice();
+
+    if (keepAudio){
+      try {
+        g = audioGraph();
+        await g.actx.resume().catch(() => {});
+        dest = g.actx.createMediaStreamDestination();
+        g.source.connect(dest);
+        dest.stream.getAudioTracks().forEach(t => tracks.push(t));
+      } catch(e){
+        banner('exp','warn','<b>Звук добавить не удалось</b> (' + esc(e.message || e) +
+          ') — ролик будет без звука.');
+      }
+    }
+
+    const mime = pickMime($('#chkMp4').checked);
+    const opts = { videoBitsPerSecond: H >= 1900 ? 10e6 : 6e6, audioBitsPerSecond: 128000 };
+    if (mime) opts.mimeType = mime;
+    rec = new MediaRecorder(new MediaStream(tracks), opts);
+    const parts = [];
+    rec.ondataavailable = e => { if (e.data && e.data.size) parts.push(e.data); };
+    const stopped = new Promise(res => { rec.onstop = res; });
+    let recErr = null;
+    rec.onerror = e => {                        // без этого битая запись молча уходила в файл
+      recErr = (e.error && e.error.message) || 'запись прервалась';
+      montageStop = true;
+    };
+    if (g) { savedMon = g.monitor.gain.value; g.monitor.gain.value = 0; }
+
+    let started = false, lit = 0, checked = 0;
+
+    for (let i = 0; i < list.length; i++){
+      if (montageStop || exportAbort) break;
+      const idx = list[i];
+      const c = S.clips[idx];
+      const dur = Math.max(0.2, c.end - c.start);
+      S.active = idx;
+      if (!await ensureClipSource(c)){
+        throw new Error('Не удалось открыть файл клипа ' + (i + 1) + ' — склейка остановлена.');
+      }
+      syncClipUi();
+      // переход не должен съесть клип целиком
+      const tD = Math.min(trDur, dur * 0.4);
+
+      setExpStatus('Склеиваю: клип ' + (i + 1) + ' из ' + list.length +
+        ' · осталось примерно ' + human_eta(totalSec - doneSec));
+
+      S.playingClip = false;
+      video.playbackRate = 1;
+      if ('preservesPitch' in video) video.preservesPitch = true;
+      video.currentTime = c.start;
+      await seekedOnce();
+      if (!await waitFrame(8000)) throw new Error('Браузер не успел подготовить кадр клипа ' + (i + 1));
+
+      resetFx();
+      FX.zoom = fxAt(fxKind === 'alt' ? (i % 2 ? 'punch' : 'zoom') : fxKind, 0, dur);
+      drawFrame(ctx, W, H, 0);
+
+      const ok = await safePlay();
+      if (!ok) throw new Error('Браузер заблокировал воспроизведение. Нажмите «▶ Играть» и повторите.');
+      // ждём, пока время реально пойдёт, иначе в запись уедет стоп-кадр
+      const spin = performance.now();
+      while (video.currentTime <= c.start + 0.005 && !video.ended
+             && performance.now() - spin < 3000){ await sleep(16); }
+
+      if (!started){ rec.start(200); started = true; } else { rec.resume(); }
+
+      const kind = fxKind === 'alt' ? (i % 2 ? 'punch' : 'zoom') : fxKind;
+      const t0 = performance.now();
+      const limit = dur * 1000 * 3 + 20000;
+      await new Promise(res => {
+        let fin = false;
+        const stop = () => { if (fin) return; fin = true; clearInterval(w); cancelAnimationFrame(raf); res(); };
+        const done = () => montageStop || exportAbort || video.ended
+          || video.currentTime >= c.end - 0.005 || performance.now() - t0 > limit;
+        const w = setInterval(() => { if (done()) stop(); }, 10);
+        const tick = () => {
+          const t = video.currentTime - c.start;
+          FX.fade = 0; FX.flash = 0; FX.prevAlpha = 0; FX.prev = null;
+          FX.zoom = fxAt(kind, t, dur);
+          if (i > 0 && t < tD){                        // въезд нового клипа
+            const k = 1 - t / tD;
+            if (tr === 'fade') FX.fade = k;
+            else if (tr === 'flash') FX.flash = k;
+            else if (tr === 'dissolve'){ FX.prev = prevCv; FX.prevAlpha = k; }
+          }
+          if (i < list.length - 1 && tr !== 'dissolve' && tr !== 'none'
+              && t > dur - tD){                        // уход старого
+            const k = clamp((t - (dur - tD)) / tD, 0, 1);
+            if (tr === 'fade') FX.fade = Math.max(FX.fade, k);
+            else if (tr === 'flash') FX.flash = Math.max(FX.flash, k);
+          }
+          drawFrame(ctx, W, H, t);
+          if ((++checked) % 12 === 1 && !looksBlank(ctx, W, H)) lit++;
+          setExpProg(clamp((doneSec + t) / Math.max(0.2, totalSec), 0, 1));
+          if (done()){ stop(); return; }
+          raf = requestAnimationFrame(tick);
+        };
+        raf = requestAnimationFrame(tick);
+      });
+
+      // запоминаем последний кадр — он нужен для наплыва
+      try { prevCtx.drawImage(canvas, 0, 0, W, H); } catch(e){}
+      doneSec += dur;
+      video.pause();
+      if (i < list.length - 1 && !montageStop && !exportAbort){
+        await sleep(60);
+        if (rec.state === 'recording') rec.pause();
+      }
+    }
+
+    await sleep(120);
+    if (rec && rec.state !== 'inactive') rec.stop();
+    await stopped;
+    tracks.forEach(t => { try { t.stop(); } catch(e){} });
+    if (g && dest){ try { g.source.disconnect(dest); } catch(e){} }
+    if (g) g.monitor.gain.value = savedMon;
+
+    const type = (rec.mimeType || mime || 'video/webm').split(';')[0];
+    if (recErr) throw new Error('Запись прервалась: ' + recErr);
+    const blob = new Blob(parts, { type });
+    if (!blob.size) throw new Error('Запись получилась пустой.');
+    if (checked >= 3 && lit === 0){
+      banner('blank','err','<b>Ролик записался чёрным.</b> Браузер не отдавал картинку — ' +
+        'не сворачивайте вкладку во время записи и попробуйте качество 720p.');
+    }
+
+    const url = URL.createObjectURL(blob);
+    const ext = type.indexOf('mp4') >= 0 ? 'mp4' : 'webm';
+    const name = 'montage_' + list.length + 'x_' + W + 'x' + H + '.' + ext;
+    if (S.montage) releaseUrl(S.montage.url);
+    S.montage = { url, size: blob.size, name, blob };
+    $('#outVideo').src = url;
+    const a = $('#btnDownload');
+    a.href = url; a.download = name;
+    $('#outInfo').textContent = 'Склейка из ' + list.length + ' клипов · ' + W + '×' + H +
+      ' · ' + fmtSize(blob.size) + ' · ' + ext.toUpperCase();
+    $('#result').classList.add('on');
+    setExpProg(1);
+    setExpStatus(montageStop ? 'Остановлено — сохранено то, что успели записать.'
+                             : 'Готово! Один ролик из ' + list.length + ' клипов.');
+    $('#result').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    window.__SVM.lastMontage = { size: blob.size, type, W, H, ext, clips: list.length, lit, checked };
+
+  } catch(err){
+    cancelAnimationFrame(raf);
+    try { video.pause(); } catch(e){}
+    if (g) g.monitor.gain.value = savedMon;
+    try { if (rec && rec.state !== 'inactive') rec.stop(); } catch(e){}
+    setExpProg(null);
+    banner('exp','err','<b>Склейка не удалась.</b> ' + esc(err && err.message || err));
+    setExpStatus('Ошибка: ' + (err && err.message || err));
+    window.__SVM.lastMontage = { size: 0, error: String(err && err.message || err) };
+  } finally {
+    resetFx();
+    S.busy = false; montageStop = false; exportAbort = false;
+    S.active = clamp(savedActive, 0, Math.max(0, S.clips.length - 1));
+    $('#btnExport').disabled = false;
+    $('#btnExportAll').disabled = false;
+    $('#btnMontage').disabled = false;
+    $('#btnExportStop').style.display = 'none';
+    syncClipUi();
+  }
+}
 
 /* --------------------------- скачивание пачкой --------------------------- */
 $('#btnDlEach').addEventListener('click', async () => {
@@ -3470,7 +3849,15 @@ async function doExport(){
   let g = null, dest = null, rec = null, raf = 0, savedMon = 1;
 
   try {
-    await ensureClipSource();                 // клип мог быть вырезан из другого файла
+    // клип мог быть вырезан из другого файла; если тот не открылся, писать
+    // нечего — иначе в файл уедет чужая картинка или чернота
+    if (!await ensureClipSource()){
+      throw new Error('Не удалось открыть файл, из которого вырезан этот клип. ' +
+        'Проверьте, что он ещё в списке и открывается.');
+    }
+    if (!S.hasVideoTrack || !S.vw || !S.vh){
+      throw new Error('У текущего файла нет пригодной видеодорожки.');
+    }
     if (!encoderWarm){
       setExpStatus('Прогреваю кодировщик — секунду…');
       await warmUpEncoder(W, H, pickMime($('#chkMp4').checked));
@@ -3515,7 +3902,21 @@ async function doExport(){
     if ('preservesPitch' in video) video.preservesPitch = true;
     video.currentTime = S.start;
     await seekedOnce();
+
+    /* Дожидаемся именно картинки, а не только метаданных. Без этого запись
+       могла начаться, когда декодер ещё пуст, и весь клип уходил чёрным. */
+    if (!await waitFrame(8000)){
+      throw new Error('Браузер не успел подготовить кадр за 8 секунд. ' +
+        'Попробуйте ещё раз, а если повторяется — перекодируйте файл в MP4 (H.264 + AAC).');
+    }
     drawFrame(ctx, W, H, 0);
+    if (looksBlank(ctx, W, H)){
+      // бывает, что после перемотки кадр ещё не подставился: подтолкнём
+      try { video.currentTime = Math.min(S.end - 0.05, S.start + 0.05); } catch(e){}
+      await seekedOnce();
+      await waitFrame(4000);
+      drawFrame(ctx, W, H, 0);
+    }
 
     if (g){ savedMon = g.monitor.gain.value; g.monitor.gain.value = 0; }
 
@@ -3538,7 +3939,7 @@ async function doExport(){
     const total = Math.max(0.2, S.end - S.start);
     const t0 = performance.now();
     const limit = total * 1000 * 3 + 20000;
-    const diag = { frames: 0, maxGap: 0, startedAt: video.currentTime };
+    const diag = { frames: 0, maxGap: 0, startedAt: video.currentTime, lit: 0, checked: 0 };
     let lastTick = t0;
 
     /* Момент остановки проверяем отдельным таймером, а не в цикле отрисовки:
@@ -3563,6 +3964,12 @@ async function doExport(){
         diag.frames++;
         const t = video.currentTime - S.start;
         drawFrame(ctx, W, H, t);
+        // изредка проверяем, что в кадре вообще что-то есть: если весь клип
+        // окажется чёрным, скажем об этом прямо, а не отдадим пустое видео
+        if (diag.frames % 12 === 1){
+          diag.checked++;
+          if (!looksBlank(ctx, W, H)) diag.lit++;
+        }
         setExpProg(clamp(t / total, 0, 1));
         if (done()){ stop(); return; }
         raf = requestAnimationFrame(tick);
@@ -3595,7 +4002,7 @@ async function doExport(){
     // чужие трогать нельзя — на них ссылаются кнопки «Скачать» в списке
     const c = cur();
     if (c){
-      if (c.out && c.out.url){ try { URL.revokeObjectURL(c.out.url); } catch(e){} }
+      if (c.out) releaseUrl(c.out.url);
       c.out = { url, size: blob.size, ext, name, W, H, blob };
     }
 
@@ -3620,6 +4027,17 @@ async function doExport(){
     /* Запись идёт по стенным часам: если браузер подтормаживал, лишние секунды
        уедут в клип застывшим кадром. Содержимое при этом правильное, но лучше
        сказать честно и подсказать, что делать. */
+    if (diag.checked >= 3 && diag.lit === 0){
+      banner('blank','err',
+        '<b>Клип записался чёрным.</b> Браузер не отдавал картинку во время записи — ' +
+        'обычно это бывает с редкими кодеками или когда вкладка была свёрнута. ' +
+        'Что помогает: не сворачивать вкладку во время записи, взять качество 720p, ' +
+        'а если файл экзотический — перекодировать его в MP4 (H.264 + AAC) командой<br>' +
+        '<code class="mono">ffmpeg -i вход -c:v libx264 -c:a aac выход.mp4</code>');
+    } else {
+      dropBanner('blank');
+    }
+
     const lag = diag.wallMs / 1000 - diag.mediaSpan;
     if (lag > Math.max(0.8, total * 0.25)){
       banner('lag','warn',
@@ -3726,6 +4144,8 @@ document.addEventListener('keydown', e => {
   }
   if (ctrl) return;
   if (!S.hasVideoTrack) return;
+  // во время записи любая перемотка уехала бы прямо в файл
+  if (S.busy) return;
   const step = e.shiftKey ? 1 : 1 / 30;
 
   switch (e.key){
@@ -3773,6 +4193,8 @@ window.__SVM = {
   loadFromUrl, looksLikeUrl,
   autoPickClips, autoPickAll, buildAutoIndex, scoreWindow, whyLabel, snapToPause,
   useSource, addSources, ensureClipSource, dropAllSources,
+  doMontage, waitFrame, looksBlank, FX, resetFx, fxAt,
+  lastMontage: null,
   clipReasons(){ return S.clips.map(c => c.why || null); },
   sources(){ return S.sources.map((s, i) => ({
     n: i + 1, name: s.name, dur: +(s.duration || 0).toFixed(2),
