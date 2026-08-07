@@ -325,6 +325,7 @@ footer a{color:var(--acc)}
       <h2><i>2</i>Клипы</h2>
       <div class="row">
         <button id="btnAuto" class="primary">🤖 Собрать лучшие моменты</button>
+        <button id="btnTop" class="ghost">🏆 Топ-подборка</button>
         <button id="btnSplit" class="ghost">✂ Нарезать всё подряд</button>
         <button id="btnAddClip" class="ghost">＋ Вручную</button>
       </div>
@@ -361,6 +362,33 @@ footer a{color:var(--acc)}
         </div>
         <p class="hint" id="splitHint">Видео будет поделено подряд на части примерно такой длины. Границы потом можно двигать вручную.</p>
       </div>
+      <div id="topBox" class="splitbox">
+        <label class="chk"><input type="checkbox" id="topOn"> Включить режим топ-подборки</label>
+        <div id="topFields" style="display:none;margin-top:10px">
+          <label class="f" for="topTitle">Заголовок подборки</label>
+          <input type="text" id="topTitle" maxlength="80" placeholder="Например: Топ 5 моментов">
+          <div class="grid3" style="margin-top:10px">
+            <div>
+              <label class="f" for="topOrder">Порядок</label>
+              <select id="topOrder">
+                <option value="down" selected>Обратный отсчёт: 5 → 1</option>
+                <option value="up">Прямой: 1 → 5</option>
+              </select>
+            </div>
+            <div>
+              <label class="f" for="topIntro">Заставка, сек</label>
+              <input type="number" id="topIntro" min="0" max="8" step="0.5" value="2.5">
+            </div>
+            <div>
+              <label class="f" for="topHold">Показывать место, сек</label>
+              <input type="number" id="topHold" min="0" max="60" step="0.5" value="0">
+            </div>
+          </div>
+          <p class="hint">Ноль в «показывать место» — подпись висит весь клип. Заставка
+            рисуется в начале склеенного ролика поверх размытого первого кадра.
+            Название каждого места вводится в разделе «Границы клипа».</p>
+        </div>
+      </div>
       <div class="clips" id="clipList"></div>
       <p class="hint">Клик по клипу — выбрать его для правки. Выбранный клип показан на предпросмотре, и все настройки ниже относятся к нему.</p>
     </section>
@@ -376,6 +404,10 @@ footer a{color:var(--acc)}
         <div><label class="f" for="inStart">Начало, сек</label><input type="number" id="inStart" step="0.05" min="0" value="0"></div>
         <div><label class="f" for="inEnd">Конец, сек</label><input type="number" id="inEnd" step="0.05" min="0" value="0"></div>
         <div><label class="f">Длительность</label><input id="inDur" class="mono" readonly value="0.00 с" tabindex="-1"></div>
+      </div>
+      <div id="nameBox" style="margin-top:10px;display:none">
+        <label class="f" for="inName">Название места — <span id="rankHint">место —</span></label>
+        <input type="text" id="inName" maxlength="90" placeholder="Например: Гоку против Фризы">
       </div>
       <p class="hint">Кнопки ставят границы по текущему кадру. Для Shorts / TikTok / Reels обычно берут 15–60 секунд.</p>
     </section>
@@ -677,6 +709,7 @@ const S = {
   bars: null,                                 // вшитые в исходник чёрные поля
   style: { size: 6.5, pos: 78, color: '#ffffff', active: '#ffd400', box: true, upper: false },
   credit: { on: false, text: '', pos: 'bottom', size: 2.2 },
+  top: { on: false, title: '', countdown: true, intro: 2.5, hold: 0 },
   montage: null,                              // готовая склейка всех клипов
   playingClip: false,
   busy: false
@@ -1306,6 +1339,7 @@ function drawFrame(ctx, W, H, tClip, drawSubs){
   ctx.restore();
   if (drawSubs !== false){
     drawSubtitles(ctx, W, H, tClip);
+    drawTop(ctx, W, H, tClip);
     drawCredit(ctx, W, H);
   }
 
@@ -1328,6 +1362,129 @@ function drawFrame(ctx, W, H, tClip, drawSubs){
     ctx.fillRect(0, 0, W, H);
     ctx.restore();
   }
+}
+
+/* ======================= режим топ-подборки ==============================
+   Формат «Топ 5 моментов»: у каждого клипа своё место и название, порядок
+   обычно обратный — от пятого к первому, чтобы досмотрели до конца.      */
+function rankOf(i){
+  const n = Math.max(1, S.clips.length);
+  return S.top.countdown ? (n - i) : (i + 1);
+}
+
+function drawTop(ctx, W, H, tClip){
+  const t = S.top;
+  if (!t.on || !S.clips.length) return;
+  if (t.hold > 0 && tClip > t.hold) return;    // подпись только в начале клипа
+  const c = S.clips[S.active];
+  if (!c) return;
+  const rank = rankOf(S.active);
+  const name = String(c.name || '').trim();
+
+  const big = Math.max(14, H * 0.085);
+  const small = Math.max(10, H * 0.033);
+  const pad = big * 0.32;
+  ctx.save();
+  ctx.textBaseline = 'alphabetic';
+  ctx.lineJoin = 'round';
+  ctx.miterLimit = 2;
+
+  ctx.font = '900 ' + big + 'px "Segoe UI","Arial Black",Arial,sans-serif';
+  const numText = '#' + rank;
+  const numW = ctx.measureText(numText).width;
+
+  ctx.font = '700 ' + small + 'px "Segoe UI",Roboto,Arial,sans-serif';
+  let nameW = name ? ctx.measureText(name).width : 0;
+  const maxNameW = W * 0.86;
+  let nameSize = small;
+  if (nameW > maxNameW){                       // длинное название ужимаем
+    nameSize = Math.max(9, small * maxNameW / nameW);
+    ctx.font = '700 ' + nameSize + 'px "Segoe UI",Roboto,Arial,sans-serif';
+    nameW = ctx.measureText(name).width;
+  }
+
+  const boxW = Math.max(numW, nameW) + pad * 2;
+  const boxH = big * 1.05 + (name ? nameSize * 1.5 : 0) + pad;
+  const bx = (W - boxW) / 2;
+  const by = H * 0.055;
+
+  ctx.fillStyle = 'rgba(0,0,0,0.46)';
+  ctx.beginPath();
+  if (ctx.roundRect) ctx.roundRect(bx, by, boxW, boxH, Math.min(pad, boxH / 2));
+  else ctx.rect(bx, by, boxW, boxH);
+  ctx.fill();
+
+  ctx.font = '900 ' + big + 'px "Segoe UI","Arial Black",Arial,sans-serif';
+  ctx.lineWidth = big * 0.16;
+  ctx.strokeStyle = '#000';
+  const numY = by + pad * 0.55 + big * 0.82;
+  ctx.strokeText(numText, (W - numW) / 2, numY);
+  ctx.fillStyle = S.style.active;
+  ctx.fillText(numText, (W - numW) / 2, numY);
+
+  if (name){
+    ctx.font = '700 ' + nameSize + 'px "Segoe UI",Roboto,Arial,sans-serif';
+    ctx.lineWidth = nameSize * 0.22;
+    ctx.strokeStyle = '#000';
+    const ny = numY + nameSize * 1.35;
+    ctx.strokeText(name, (W - nameW) / 2, ny);
+    ctx.fillStyle = '#ffffff';
+    ctx.fillText(name, (W - nameW) / 2, ny);
+  }
+  ctx.restore();
+}
+
+/* Заставка склеенного ролика: заголовок поверх размытого кадра. */
+function drawIntro(ctx, W, H, k){
+  drawBlurBackground(ctx, W, H);
+  ctx.save();
+  ctx.fillStyle = 'rgba(0,0,0,0.42)';
+  ctx.fillRect(0, 0, W, H);
+
+  const title = String(S.top.title || '').trim() || 'Топ моментов';
+  let fs = Math.max(18, H * 0.075);
+  ctx.textBaseline = 'alphabetic';
+  ctx.lineJoin = 'round';
+  ctx.miterLimit = 2;
+  const setF = s => { ctx.font = '900 ' + s + 'px "Segoe UI","Arial Black",Arial,sans-serif'; };
+  setF(fs);
+
+  // переносим по словам
+  const maxW = W * 0.84;
+  const words = title.split(/\s+/).filter(Boolean);
+  let lines = [], line = '';
+  for (const w of words){
+    const probe = line ? line + ' ' + w : w;
+    if (ctx.measureText(probe).width > maxW && line){ lines.push(line); line = w; }
+    else line = probe;
+  }
+  if (line) lines.push(line);
+  while (lines.length > 4 && fs > 20){         // не влезло — мельче
+    fs *= 0.85; setF(fs);
+    lines = [];
+    line = '';
+    for (const w of words){
+      const probe = line ? line + ' ' + w : w;
+      if (ctx.measureText(probe).width > maxW && line){ lines.push(line); line = w; }
+      else line = probe;
+    }
+    if (line) lines.push(line);
+  }
+
+  const lh = fs * 1.22;
+  const top = H / 2 - (lines.length * lh) / 2;
+  const appear = clamp(k * 3, 0, 1);           // мягкое появление
+  ctx.globalAlpha = appear;
+  lines.forEach((ln, i) => {
+    const w = ctx.measureText(ln).width;
+    const y = top + i * lh + fs * 0.82;
+    ctx.lineWidth = fs * 0.17;
+    ctx.strokeStyle = '#000';
+    ctx.strokeText(ln, (W - w) / 2, y);
+    ctx.fillStyle = '#fff';
+    ctx.fillText(ln, (W - w) / 2, y);
+  });
+  ctx.restore();
 }
 
 /* Подпись источника: мелкая строка у края кадра, отдельно от субтитров. */
@@ -1881,6 +2038,11 @@ function syncClipUi(){
   const tag = '№' + (S.clips.length ? S.active + 1 : '—');
   $('#curTag').textContent = tag;
   $('#cueTag').textContent = tag;
+  $('#nameBox').style.display = S.top.on ? '' : 'none';
+  if (S.top.on){
+    $('#inName').value = (c && c.name) || '';
+    $('#rankHint').textContent = S.clips.length ? 'место #' + rankOf(S.active) : 'место —';
+  }
   placeGrips();
   drawPreview();
 }
@@ -1915,6 +2077,10 @@ function renderClips(){
     const words = c.cues.reduce((a, x) => a + x.words.length, 0);
     const subs = c.cues.length ? c.cues.length + ' реплик, ' + words + ' слов' : 'без субтитров';
     const done = c.out ? 'готов ' + fmtSize(c.out.size) + ' · ' : '';
+    const rank = S.top.on
+      ? '<b style="color:var(--acc)">#' + rankOf(i) + '</b> ' +
+        (c.name ? esc(c.name) + ' · ' : '· ')
+      : '';
     const why = c.why ? '<b style="color:var(--acc)">' + esc(c.why) + '</b> · ' : '';
     const from = S.sources.length > 1
       ? (() => { const s = S.sources.find(x => x.id === c.srcId); return s ? esc(s.name) + ' · ' : ''; })()
@@ -1924,7 +2090,7 @@ function renderClips(){
       '<div class="meta">' +
         '<div class="when"><span class="dot ' + (c.out ? 'ready' : '') + '"></span>' +
           fmtTime(c.start) + ' → ' + fmtTime(c.end) + ' · ' + (c.end - c.start).toFixed(1) + ' с</div>' +
-        '<div class="sub">' + from + why + done + esc(subs) + '</div>' +
+        '<div class="sub">' + rank + from + why + done + esc(subs) + '</div>' +
       '</div>' +
       '<div class="acts">' +
         (c.out ? '<a href="' + c.out.url + '" download="' + esc(c.out.name) + '" title="Скачать клип">⬇</a>' : '') +
@@ -2190,6 +2356,39 @@ $('#btnAutoGo').addEventListener('click', async () => {
   if ($('#auAsr').checked){
     await runAsr(S.clips.map((_, i) => i));
   }
+});
+
+/* --- режим топ-подборки --- */
+$('#btnTop').addEventListener('click', () => {
+  $('#topBox').classList.toggle('on');
+  $('#autoBox').classList.remove('on');
+  $('#splitBox').classList.remove('on');
+});
+$('#topOn').addEventListener('change', e => {
+  S.top.on = e.target.checked;
+  $('#topFields').style.display = S.top.on ? '' : 'none';
+  $('#nameBox').style.display = S.top.on ? '' : 'none';
+  if (S.top.on && !S.top.title){
+    S.top.title = 'Топ ' + S.clips.length + ' моментов';
+    $('#topTitle').value = S.top.title;
+  }
+  syncClipUi();
+});
+$('#topTitle').addEventListener('input', e => { S.top.title = e.target.value; drawPreview(); });
+$('#topOrder').addEventListener('change', e => {
+  S.top.countdown = e.target.value === 'down';
+  renderClips(); syncClipUi();
+});
+$('#topIntro').addEventListener('input', e => {
+  S.top.intro = clamp(parseFloat(e.target.value) || 0, 0, 8);
+});
+$('#topHold').addEventListener('input', e => {
+  S.top.hold = clamp(parseFloat(e.target.value) || 0, 0, 60);
+  drawPreview();
+});
+$('#inName').addEventListener('input', e => {
+  const c = cur();
+  if (c){ c.name = e.target.value; renderClips(); drawPreview(); }
 });
 
 /* --- автонарезка всего видео на равные части --- */
@@ -3611,6 +3810,23 @@ async function doMontage(){
       FX.zoom = fxAt(fxKind === 'alt' ? (i % 2 ? 'punch' : 'zoom') : fxKind, 0, dur);
       drawFrame(ctx, W, H, 0);
 
+      /* Заставка рисуется ДО запуска воспроизведения — иначе первые секунды
+         первого клипа проиграли бы под ней и потерялись. */
+      if (!started){
+        rec.start(200); started = true;
+        if (S.top.on && S.top.intro > 0){
+          setExpStatus('Рисую заставку…');
+          const iv = S.top.intro * 1000;
+          const i0 = performance.now();
+          while (performance.now() - i0 < iv && !montageStop && !exportAbort){
+            drawIntro(ctx, W, H, (performance.now() - i0) / 1000);
+            checked++; lit++;                  // заставка — заведомо не чернота
+            await sleep(1000 / fps);
+          }
+          if (rec.state === 'recording') rec.pause();   // пауза на время разгона
+        }
+      }
+
       const ok = await safePlay();
       if (!ok) throw new Error('Браузер заблокировал воспроизведение. Нажмите «▶ Играть» и повторите.');
       // ждём, пока время реально пойдёт, иначе в запись уедет стоп-кадр
@@ -3618,7 +3834,7 @@ async function doMontage(){
       while (video.currentTime <= c.start + 0.005 && !video.ended
              && performance.now() - spin < 3000){ await sleep(16); }
 
-      if (!started){ rec.start(200); started = true; } else { rec.resume(); }
+      if (rec.state === 'paused') rec.resume();
 
       const kind = fxKind === 'alt' ? (i % 2 ? 'punch' : 'zoom') : fxKind;
       const t0 = performance.now();
@@ -4194,6 +4410,7 @@ window.__SVM = {
   autoPickClips, autoPickAll, buildAutoIndex, scoreWindow, whyLabel, snapToPause,
   useSource, addSources, ensureClipSource, dropAllSources,
   doMontage, waitFrame, looksBlank, FX, resetFx, fxAt,
+  drawTop, drawIntro, rankOf,
   lastMontage: null,
   clipReasons(){ return S.clips.map(c => c.why || null); },
   sources(){ return S.sources.map((s, i) => ({
