@@ -384,6 +384,7 @@ footer a{color:var(--acc)}
               <input type="number" id="topHold" min="0" max="60" step="0.5" value="0">
             </div>
           </div>
+          <label class="chk" style="margin-top:10px"><input type="checkbox" id="topList" checked> Показать весь список в заставке <span class="hint" style="margin:0">— строки «1) Название» проявляются одна за другой</span></label>
           <p class="hint">Ноль в «показывать место» — подпись висит весь клип. Заставка
             рисуется в начале склеенного ролика поверх размытого первого кадра.
             Название каждого места вводится в разделе «Границы клипа».</p>
@@ -709,7 +710,7 @@ const S = {
   bars: null,                                 // вшитые в исходник чёрные поля
   style: { size: 6.5, pos: 78, color: '#ffffff', active: '#ffd400', box: true, upper: false },
   credit: { on: false, text: '', pos: 'bottom', size: 2.2 },
-  top: { on: false, title: '', countdown: true, intro: 2.5, hold: 0 },
+  top: { on: false, title: '', countdown: true, intro: 2.5, hold: 0, list: true },
   montage: null,                              // готовая склейка всех клипов
   playingClip: false,
   busy: false
@@ -1434,55 +1435,102 @@ function drawTop(ctx, W, H, tClip){
   ctx.restore();
 }
 
-/* Заставка склеенного ролика: заголовок поверх размытого кадра. */
-function drawIntro(ctx, W, H, k){
-  drawBlurBackground(ctx, W, H);
-  ctx.save();
-  ctx.fillStyle = 'rgba(0,0,0,0.42)';
-  ctx.fillRect(0, 0, W, H);
+/* Список мест по порядку: 1) …, 2) … — в том виде, в каком его читают. */
+function topList(){
+  const out = [];
+  for (let r = 1; r <= S.clips.length; r++){
+    const i = S.clips.findIndex((_, idx) => rankOf(idx) === r);
+    if (i < 0) continue;
+    out.push({ rank: r, name: String(S.clips[i].name || '').trim() });
+  }
+  return out;
+}
 
-  const title = String(S.top.title || '').trim() || 'Топ моментов';
-  let fs = Math.max(18, H * 0.075);
-  ctx.textBaseline = 'alphabetic';
-  ctx.lineJoin = 'round';
-  ctx.miterLimit = 2;
-  const setF = s => { ctx.font = '900 ' + s + 'px "Segoe UI","Arial Black",Arial,sans-serif'; };
-  setF(fs);
-
-  // переносим по словам
-  const maxW = W * 0.84;
-  const words = title.split(/\s+/).filter(Boolean);
-  let lines = [], line = '';
+function wrapText(ctx, text, maxW){
+  const words = String(text).split(/\s+/).filter(Boolean);
+  const lines = [];
+  let line = '';
   for (const w of words){
     const probe = line ? line + ' ' + w : w;
     if (ctx.measureText(probe).width > maxW && line){ lines.push(line); line = w; }
     else line = probe;
   }
   if (line) lines.push(line);
-  while (lines.length > 4 && fs > 20){         // не влезло — мельче
-    fs *= 0.85; setF(fs);
-    lines = [];
-    line = '';
-    for (const w of words){
-      const probe = line ? line + ' ' + w : w;
-      if (ctx.measureText(probe).width > maxW && line){ lines.push(line); line = w; }
-      else line = probe;
-    }
-    if (line) lines.push(line);
+  return lines.length ? lines : [''];
+}
+
+/* Заставка склеенного ролика: заголовок и, если включено, весь список
+   мест сразу — строки проявляются одна за другой. */
+function drawIntro(ctx, W, H, elapsed, total){
+  total = total || 2.5;
+  drawBlurBackground(ctx, W, H);
+  ctx.save();
+  ctx.fillStyle = 'rgba(0,0,0,0.52)';
+  ctx.fillRect(0, 0, W, H);
+  ctx.textBaseline = 'alphabetic';
+  ctx.lineJoin = 'round';
+  ctx.miterLimit = 2;
+
+  const title = String(S.top.title || '').trim() || 'Топ моментов';
+  const items = S.top.list ? topList().filter(x => x.name) : [];
+  const maxW = W * 0.86;
+
+  // подбираем размеры так, чтобы заголовок и список поместились целиком
+  let tf = H * 0.072, itf = H * 0.038;
+  let tLines, iLines, blockH;
+  for (let pass = 0; pass < 14; pass++){
+    ctx.font = '900 ' + tf + 'px "Segoe UI","Arial Black",Arial,sans-serif';
+    tLines = wrapText(ctx, title, maxW);
+    ctx.font = '700 ' + itf + 'px "Segoe UI",Roboto,Arial,sans-serif';
+    iLines = items.map(x => wrapText(ctx, x.rank + ') ' + x.name, maxW * 0.94));
+    const tH = tLines.length * tf * 1.2;
+    const iH = iLines.reduce((a, ls) => a + ls.length * itf * 1.32, 0) + (items.length ? itf * 0.7 : 0);
+    blockH = tH + iH;
+    if (blockH <= H * 0.78) break;
+    tf *= 0.9; itf *= 0.9;
   }
 
-  const lh = fs * 1.22;
-  const top = H / 2 - (lines.length * lh) / 2;
-  const appear = clamp(k * 3, 0, 1);           // мягкое появление
-  ctx.globalAlpha = appear;
-  lines.forEach((ln, i) => {
+  let y = H / 2 - blockH / 2;
+
+  // заголовок
+  ctx.font = '900 ' + tf + 'px "Segoe UI","Arial Black",Arial,sans-serif';
+  ctx.globalAlpha = clamp(elapsed * 4, 0, 1);
+  ctx.lineWidth = tf * 0.17;
+  for (const ln of tLines){
     const w = ctx.measureText(ln).width;
-    const y = top + i * lh + fs * 0.82;
-    ctx.lineWidth = fs * 0.17;
-    ctx.strokeStyle = '#000';
-    ctx.strokeText(ln, (W - w) / 2, y);
-    ctx.fillStyle = '#fff';
-    ctx.fillText(ln, (W - w) / 2, y);
+    y += tf * 1.2;
+    ctx.strokeStyle = '#000'; ctx.strokeText(ln, (W - w) / 2, y - tf * 0.28);
+    ctx.fillStyle = '#fff';  ctx.fillText(ln, (W - w) / 2, y - tf * 0.28);
+  }
+  if (items.length) y += itf * 0.7;
+
+  // строки списка — по очереди
+  ctx.font = '700 ' + itf + 'px "Segoe UI",Roboto,Arial,sans-serif';
+  ctx.lineWidth = itf * 0.2;
+  const first = Math.min(0.4, total * 0.18);
+  const step = Math.max(0.12, (total * 0.8 - first) / Math.max(1, items.length));
+  items.forEach((it, j) => {
+    const from = first + j * step;
+    ctx.globalAlpha = clamp((elapsed - from) / 0.28, 0, 1);
+    if (ctx.globalAlpha <= 0.001){ y += iLines[j].length * itf * 1.32; return; }
+    iLines[j].forEach((ln, li) => {
+      const w = ctx.measureText(ln).width;
+      y += itf * 1.32;
+      const x = (W - w) / 2;
+      ctx.strokeStyle = '#000'; ctx.strokeText(ln, x, y - itf * 0.3);
+      // номер выделяем цветом активного слова, остальное белым
+      if (li === 0){
+        const numTxt = it.rank + ')';
+        const numW = ctx.measureText(numTxt).width;
+        ctx.fillStyle = S.style.active;
+        ctx.fillText(numTxt, x, y - itf * 0.3);
+        ctx.fillStyle = '#fff';
+        ctx.fillText(ln.slice(numTxt.length), x + numW, y - itf * 0.3);
+      } else {
+        ctx.fillStyle = '#fff';
+        ctx.fillText(ln, x, y - itf * 0.3);
+      }
+    });
   });
   ctx.restore();
 }
@@ -2385,6 +2433,17 @@ $('#topIntro').addEventListener('input', e => {
 $('#topHold').addEventListener('input', e => {
   S.top.hold = clamp(parseFloat(e.target.value) || 0, 0, 60);
   drawPreview();
+});
+$('#topList').addEventListener('change', e => {
+  S.top.list = e.target.checked;
+  // на список нужно время: строки проявляются по очереди
+  if (S.top.list){
+    const need = clamp(1.2 + S.clips.length * 0.45, 2, 8);
+    if (S.top.intro < need){
+      S.top.intro = Math.round(need * 2) / 2;
+      $('#topIntro').value = String(S.top.intro);
+    }
+  }
 });
 $('#inName').addEventListener('input', e => {
   const c = cur();
@@ -3819,7 +3878,7 @@ async function doMontage(){
           const iv = S.top.intro * 1000;
           const i0 = performance.now();
           while (performance.now() - i0 < iv && !montageStop && !exportAbort){
-            drawIntro(ctx, W, H, (performance.now() - i0) / 1000);
+            drawIntro(ctx, W, H, (performance.now() - i0) / 1000, S.top.intro);
             checked++; lit++;                  // заставка — заведомо не чернота
             await sleep(1000 / fps);
           }
@@ -4410,7 +4469,7 @@ window.__SVM = {
   autoPickClips, autoPickAll, buildAutoIndex, scoreWindow, whyLabel, snapToPause,
   useSource, addSources, ensureClipSource, dropAllSources,
   doMontage, waitFrame, looksBlank, FX, resetFx, fxAt,
-  drawTop, drawIntro, rankOf,
+  drawTop, drawIntro, rankOf, topList, wrapText,
   lastMontage: null,
   clipReasons(){ return S.clips.map(c => c.why || null); },
   sources(){ return S.sources.map((s, i) => ({
