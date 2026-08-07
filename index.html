@@ -430,6 +430,37 @@ footer a{color:var(--acc)}
         <input type="range" id="blurAmt" min="4" max="40" step="1" value="18">
       </div>
       <label class="chk" style="margin-top:11px"><input type="checkbox" id="chkBars" checked> Обрезать чёрные поля в исходнике <span class="hint" style="margin:0" id="barsNote"></span></label>
+
+      <div class="credit">
+        <label class="chk"><input type="checkbox" id="cenOn"> Цензура: приглушать кровь и жёсткие кадры</label>
+        <div id="cenBox" style="display:none;margin-top:9px">
+          <div class="grid3">
+            <div>
+              <label class="f" for="cenMode">Когда включать</label>
+              <select id="cenMode">
+                <option value="auto" selected>Само, по красному в кадре</option>
+                <option value="always">Весь клип</option>
+              </select>
+            </div>
+            <div>
+              <label class="f" for="cenFx">Что делать</label>
+              <select id="cenFx">
+                <option value="bw" selected>Обесцветить</option>
+                <option value="blur">Размыть</option>
+                <option value="both">И то и другое</option>
+              </select>
+            </div>
+            <div>
+              <label class="f" for="cenThr">Чувствительность — <span id="cenThrVal">6%</span></label>
+              <input type="range" id="cenThr" min="1" max="30" step="1" value="6">
+            </div>
+          </div>
+          <p class="hint" id="cenNote">Приложение считает долю «кровавых» пикселей — тёмно-красных,
+            резко отличающихся от зелёного и синего. Это оценка по цвету, а не понимание
+            картинки: красная одежда или закат тоже её включат. Порогом ниже настраивается,
+            с какой доли срабатывать.</p>
+        </div>
+      </div>
       <p class="hint" id="cropHint">В режиме обрезки из широкого кадра вырезается вертикальная полоса — ползунком выберите, какую именно часть оставить.</p>
     </section>
 
@@ -711,6 +742,7 @@ const S = {
   style: { size: 6.5, pos: 78, color: '#ffffff', active: '#ffd400', box: true, upper: false },
   credit: { on: false, text: '', pos: 'bottom', size: 2.2 },
   top: { on: false, title: '', countdown: true, intro: 2.5, hold: 0, list: true },
+  censor: { on: false, mode: 'auto', fx: 'bw', thr: 0.06 },
   montage: null,                              // готовая склейка всех клипов
   playingClip: false,
   busy: false
@@ -1311,6 +1343,81 @@ function zoomRect(r){
   return { sx: r.sx + (r.sw - sw) / 2, sy: r.sy + (r.sh - sh) / 2, sw, sh };
 }
 
+/* ============================ цензура кадра =============================
+   Считаем долю «кровавых» пикселей на уменьшенной копии кадра: тёмно-красные,
+   резко отличающиеся от зелёного и синего. Это оценка по цвету, а не понимание
+   картинки — так и написано в интерфейсе. Дальше кадр обесцвечивается или
+   размывается, с гистерезисом и плавным переходом, чтобы не мигало.       */
+const cenCv = document.createElement('canvas');
+const cenCtx = cenCv.getContext('2d', { willReadFrequently: true });
+const cenBlurCv = document.createElement('canvas');
+const cenBlurCtx = cenBlurCv.getContext('2d', { alpha: false });
+const cen = { level: 0, amount: 0, last: -1e9, active: false };
+
+function measureRed(rect){
+  const now = performance.now();
+  if (now - cen.last < 70) return cen.level;   // чаще незачем, кадр не успевает измениться
+  cen.last = now;
+  if (!S.hasVideoTrack || video.readyState < 2) return cen.level;
+  const w = 56, h = 32;
+  if (cenCv.width !== w){ cenCv.width = w; cenCv.height = h; }
+  try { cenCtx.drawImage(video, rect.sx, rect.sy, rect.sw, rect.sh, 0, 0, w, h); }
+  catch(e){ return cen.level; }
+  let d;
+  try { d = cenCtx.getImageData(0, 0, w, h).data; } catch(e){ return cen.level; }
+  let red = 0, n = 0;
+  for (let i = 0; i < d.length; i += 4){
+    const r = d[i], g = d[i + 1], b = d[i + 2];
+    n++;
+    if (r > 55 && r > g * 1.7 && r > b * 1.7) red++;
+  }
+  cen.level = n ? red / n : 0;
+  return cen.level;
+}
+
+function censorAmount(rect){
+  const c = S.censor;
+  if (!c.on){ cen.amount = 0; cen.active = false; return 0; }
+  if (c.mode === 'always'){ cen.amount = 1; cen.active = true; return 1; }
+  const lvl = measureRed(rect);
+  // гистерезис: включаемся на пороге, отпускаем заметно ниже
+  if (lvl >= c.thr) cen.active = true;
+  else if (lvl < c.thr * 0.6) cen.active = false;
+  const target = cen.active ? 1 : 0;
+  cen.amount += (target - cen.amount) * 0.3;
+  if (cen.amount < 0.004) cen.amount = 0;
+  if (cen.amount > 0.996) cen.amount = 1;
+  return cen.amount;
+}
+
+function applyCensor(ctx, W, H, amt){
+  if (amt <= 0.005) return;
+  const fx = S.censor.fx;
+  if (fx === 'blur' || fx === 'both'){
+    const bw = 64, bh = Math.max(2, Math.round(64 * H / W));
+    if (cenBlurCv.width !== bw){ cenBlurCv.width = bw; cenBlurCv.height = bh; }
+    try {
+      cenBlurCtx.drawImage(ctx.canvas, 0, 0, W, H, 0, 0, bw, bh);
+      ctx.save();
+      ctx.globalAlpha = amt;
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = 'high';
+      ctx.drawImage(cenBlurCv, 0, 0, bw, bh, 0, 0, W, H);
+      ctx.restore();
+    } catch(e){}
+  }
+  if (fx === 'bw' || fx === 'both'){
+    // режим наложения «saturation» забирает насыщенность у верхнего слоя:
+    // серая заливка обнуляет её у всего, что нарисовано ниже
+    ctx.save();
+    ctx.globalCompositeOperation = 'saturation';
+    ctx.globalAlpha = amt;
+    ctx.fillStyle = 'hsl(0,0%,50%)';
+    ctx.fillRect(0, 0, W, H);
+    ctx.restore();
+  }
+}
+
 function drawFrame(ctx, W, H, tClip, drawSubs){
   ctx.save();
   ctx.fillStyle = '#000';
@@ -1338,6 +1445,11 @@ function drawFrame(ctx, W, H, tClip, drawSubs){
     }
   }
   ctx.restore();
+
+  /* Цензура ложится на картинку, но НЕ на субтитры и плашки — они рисуются
+     ниже и остаются читаемыми и цветными. */
+  if (ready) applyCensor(ctx, W, H, censorAmount(S.crop === 'blur' ? contentRect() : cropRect()));
+
   if (drawSubs !== false){
     drawSubtitles(ctx, W, H, tClip);
     drawTop(ctx, W, H, tClip);
@@ -4470,6 +4582,7 @@ window.__SVM = {
   useSource, addSources, ensureClipSource, dropAllSources,
   doMontage, waitFrame, looksBlank, FX, resetFx, fxAt,
   drawTop, drawIntro, rankOf, topList, wrapText,
+  measureRed, censorAmount, applyCensor, cen,
   lastMontage: null,
   clipReasons(){ return S.clips.map(c => c.why || null); },
   sources(){ return S.sources.map((s, i) => ({
@@ -4505,6 +4618,27 @@ renderClips();
 refreshUndoUi();
 $('#chkPause').addEventListener('change', updateSplitHint);
 $('#chkBars').addEventListener('change', () => { resizePreview(); drawPreview(); });
+
+/* --------------------------------- цензура -------------------------------- */
+$('#cenOn').addEventListener('change', e => {
+  S.censor.on = e.target.checked;
+  $('#cenBox').style.display = S.censor.on ? '' : 'none';
+  cen.amount = 0; cen.active = false;
+  drawPreview();
+});
+$('#cenMode').addEventListener('change', e => {
+  S.censor.mode = e.target.value;
+  $('#cenThr').closest('div').style.opacity = S.censor.mode === 'auto' ? '1' : '.4';
+  cen.amount = 0; cen.active = false;
+  drawPreview();
+});
+$('#cenFx').addEventListener('change', e => { S.censor.fx = e.target.value; drawPreview(); });
+$('#cenThr').addEventListener('input', e => {
+  S.censor.thr = clamp(parseFloat(e.target.value) / 100, 0.01, 0.5);
+  $('#cenThrVal').textContent = Math.round(S.censor.thr * 100) + '%';
+  cen.active = false;
+  drawPreview();
+});
 applyCropUi();
 addEventListener('resize', () => { resizePreview(); drawWave(); drawPreview(); });
 drawFrame(pctx, preview.width, preview.height, 0);
